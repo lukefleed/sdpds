@@ -1,0 +1,306 @@
+We consider the dictionary problem, which consists of maintaining a dynamic set $S \subseteq \mathcal{U}$ and supporting the operations \textsc{Insert}$(x)$, \textsc{Delete}$(x)$, and \textsc{Query}$(x)$, where the \textsc{Query}$(x)$ operation must return whether $x \in S$. In a large-scale distributed environment, this problem's complexity is amplified by the constraints of network communication. Classical deterministic solutions, such as hash tables or search trees, become infeasible. Such structures require space proportional to the number and size of elements, which is prohibitive for massive sets. More critically, when a set is partitioned or replicated across multiple nodes to achieve scalability and fault tolerance, synchronizing these deterministic structures necessitates costly data transfers, creating communication overhead that represents the primary bottleneck to system performance \cite{mca-29-00042}.
+
+Probabilistic data structures offer a solution by relaxing the correctness guarantee to achieve sublinear space complexity, a critical attribute for scalable systems. This approach allows a system to trade a quantifiable measure of precision for substantial gains in space and communication efficiency.
+
+\begin{definition}[One-Sided Error Membership Oracle]
+    A data structure $\mathcal{D}$ representing a set $S$ is a one-sided error membership oracle with a false positive rate $\varepsilon$ if for any element $x \in S$, the probability that $\mathcal{D}.\textsc{Query}(x)$ returns true is 1, and for any element $y \notin S$, the probability that $\mathcal{D}.\textsc{Query}(y)$ returns true is at most $\varepsilon$.
+\end{definition}
+
+By definition, the oracle never produces false negatives. This property is paramount in distributed systems, as a definitive negative answer can be used to avoid expensive and high-latency remote operations, such as disk I/O or network round-trips \cite{bloom-filters}. The adoption of such structures is not an ad-hoc optimization but a principled architectural strategy. It provides a mechanism to implement the PA/EL configuration of the PACELC theorem, where a system, during normal operation, explicitly chooses lower Latency over strong Consistency. By accepting a bounded and well-defined error probability, these algorithms enable a level of scalability and performance that would be unattainable with exact, deterministic methods.
+
+\subsection{The Bloom Filter}
+The Bloom filter is a space-efficient data structure that provides an implementation of a one-sided error membership oracle \cite{tarkoma2011theory}.
+
+\begin{definition}[Bloom Filter]
+    A Bloom filter for a set $S$ with cardinality $|S| \leq n$ from a universe $\mathcal{U}$ consists of a bit array $B$ of length $m$ initialized to all zeros, and a collection of $k$ independent hash functions $\mathcal{H} = \{h_1, \ldots, h_k\}$, where each $h_i : \mathcal{U} \to \{0, 1, \ldots, m-1\}$.
+\end{definition}
+
+The insertion and query operations are defined as follows. To insert an element $x \in S$, the bits at positions $B[h_i(x)]$ are set to 1 for all $i \in \{1, \ldots, k\}$. To query for an element $y$, the operation returns true if and only if $B[h_i(y)] = 1$ for all $i \in \{1, \ldots, k\}$. A query for any element $y \in S$ is guaranteed to return true, as all corresponding bits will have been set during insertion, thus satisfying the no-false-negatives condition of the oracle.
+
+For an element $y \notin S$, a false positive occurs if all $k$ bits corresponding to its hash values have been incidentally set to 1 by the insertion of other elements. Assuming the hash functions distribute elements uniformly over the bit array, the probability of a specific bit remaining 0 after $n$ insertions is $(1 - 1/m)^{kn} \approx e^{-kn/m}$. The probability of a false positive, $\varepsilon$, is therefore approximated by the probability that all $k$ bits for the queried element are 1 \cite{tarkoma2011theory}.
+
+\begin{proposition}[False Positive Probability]
+    The false positive probability of a Bloom filter is $\varepsilon \approx (1 - e^{-kn/m})^k$.
+\end{proposition}
+
+Given a fixed ratio of bits per element, $m/n$, there exists an optimal number of hash functions, $k$, that minimizes this probability.
+
+\begin{theorem}[Optimal Hash Function Count]
+    For a given ratio $m/n$, the false positive rate $\varepsilon$ is minimized when the number of hash functions is $k = (m/n) \ln 2$.
+\end{theorem}
+
+This leads to a direct relationship between the space allocated per element and the achievable false positive rate, which defines the fundamental space-error trade-off of the structure.
+
+\begin{corollary}[Space-Error Relationship]
+    To achieve a target false positive rate $\varepsilon$ with an optimal number of hash functions, the required number of bits per element is given by $m/n = -\frac{\ln \varepsilon}{(\ln 2)^2} \approx 1.44 \log_2(1/\varepsilon)$.
+\end{corollary}
+
+This result establishes the asymptotic space complexity of the Bloom filter as $\Theta(n \log(1/\varepsilon))$, independent of the size of the elements or the universe $\mathcal{U}$. The performance and accuracy of the filter depend on the quality of its hash functions. While universal hashing provides theoretical guarantees, fast non-cryptographic hash functions with good distribution properties, such as Murmur3, are often used in practice. Techniques like double hashing, which generates $k$ hash values from two initial hashes, can further reduce computational overhead without increasing the asymptotic false positive probability \cite{tarkoma2011theory}.
+
+Despite its efficiency, the standard Bloom filter has two fundamental limitations that restrict its use in dynamic distributed systems. First, it does not support element deletion; clearing a bit from 1 to 0 could inadvertently affect other elements that map to that bit, thereby introducing false negatives. Second, its size is fixed at creation time based on an expected number of elements, $n$. If the actual number of elements substantially exceeds this estimate, the false positive rate degrades rapidly \cite{bloom-filters, tarkoma2011theory}.
+
+\subsection{Bloom Filter Variants for Dynamic Systems}
+The static nature of the standard Bloom filter creates significant operational challenges in dynamic distributed systems where set cardinalities are unknown or fluctuate. We analyze variants that address these limitations.
+
+\subsubsection{Counting Bloom Filter}
+To support element deletion without introducing false negatives, the Counting Bloom Filter (CBF) modifies the underlying structure \cite{tarkoma2011theory}.
+
+\begin{definition}[Counting Bloom Filter] \label{def:counting-bloom}
+    A Counting Bloom Filter consists of an array $C$ of $m$ counters, each of $c$ bits, initialized to all zeros. It uses a collection of $k$ independent hash functions $\mathcal{H} = \{h_1, \ldots, h_k\}$, where each $h_i : \mathcal{U} \to \{0, \ldots, m-1\}$.
+\end{definition}
+
+The operations are redefined to act upon these counters. To insert an element, the counters at the $k$ hash positions are incremented. To delete an element, the corresponding counters are decremented. A membership query returns true if and only if all corresponding counters are positive. The primary trade-off is a space complexity increase by a factor of $c$ compared to a standard Bloom filter. The selection of counter size $c$ must be sufficient to avoid overflow; for most applications, a 4-bit counter is sufficient \cite{tarkoma2011theory}. The utility of the CBF in distributed systems extends to set reconciliation protocols, where the arithmetic properties of the counters allow for the computation of set differences by subtracting one filter's counter array from another \cite{bloom-filters}.
+
+\subsubsection{Scalable Bloom Filter}
+To accommodate sets of unknown or unbounded cardinality, the Scalable Bloom Filter (SBF) employs a sequence of standard filters \cite{tarkoma2011theory}.
+
+\begin{definition}[Scalable Bloom Filter]
+    An SBF is a sequence of $s$ Bloom filters, $B_1, B_2, \ldots, B_s$. Each filter $B_i$ is defined by its size $m_i$ and number of hash functions $k_i$. The sequence is constructed such that for $i > 1$, $m_i > m_{i-1}$ and the target false positive rate $\varepsilon_i < \varepsilon_{i-1}$, typically following a geometric progression.
+\end{definition}
+
+New elements are inserted only into the last filter in the sequence, $B_s$. If this filter exceeds a predefined capacity threshold, a new filter $B_{s+1}$ with stricter parameters is appended. A query operation must check for the element's presence in every filter from $B_s$ down to $B_1$. While this architecture allows the structure to grow dynamically, its application in distributed systems is limited by its lack of simple composability. The heterogeneity of the constituent filters prevents a meaningful bitwise union operation, complicating state aggregation tasks that rely on the algebraic properties of standard Bloom filters \cite{bloom-filters, tarkoma2011theory}.
+
+\subsection{Variants for Parallelism and Network Efficiency}
+Further variants have been developed to address the operational demands of high-concurrency and communication-constrained environments.
+
+\subsubsection{Parallelism and Composability}
+A Partitioned Bloom Filter modifies the internal structure by dividing the bit array into $k$ disjoint slices, with each hash function mapped to a unique slice. This can facilitate parallel operations by reducing contention \cite{bloom-filters, tarkoma2011theory}. A more advanced architecture, the Parallel Partitioned Bloom Filter (Par-BF), is designed for high-throughput dynamic systems. It uses a series of homogeneous sub-filters (sharing the same $m$ and $k$). This homogeneity preserves the ability to perform bitwise union and intersection operations, a feature lost in the SBF. The list of sub-filters is then partitioned into groups, allowing query operations to be executed in parallel across these groups, thus regaining operational flexibility for tasks like state merging and garbage collection in distributed settings \cite{bloom-filters}.
+
+\subsubsection{Network Efficiency}
+The Compressed Bloom Filter is designed to optimize the transmission of filter state over a network. The key idea is to use a non-optimal number of hash functions $k$ such that the resulting bit array has a lower probability of bits being set to one (less than $1/2$). This makes the bit array more amenable to standard compression algorithms, potentially resulting in a smaller transmitted size for a given target false positive rate after decompression \cite{tarkoma2011theory}.
+
+\subsection{Challenges in Distributed Bloom Filter Implementations}
+The deployment of Bloom filters in a distributed system introduces a new class of complex challenges that are absent in single-node implementations. These challenges arise from the fundamental realities of distributed computing: network latency, the possibility of network partitions, and the need to manage a shared state across independent nodes.
+
+\subsubsection{Synchronization, Staleness, and the False Negative Paradox}
+In many distributed architectures, it is advantageous to replicate a Bloom filter across multiple nodes to allow for fast, local lookups. However, maintaining perfect, instantaneous consistency across these replicas is physically impossible due to network latency. This inherent delay means that replicas will inevitably become "stale" \cite{bloom-filters, dds-osdi}.
+
+The most profound consequence of replica staleness is the violation of the Bloom filter's core guarantee: the absence of false negatives. In a distributed system with replicated filters, a new type of error emerges. Consider a system where an element $x$ is added to the global set. The update is applied to the primary Bloom filter on Node A, and a message is sent to update the replica on Node B. Due to network propagation delay, there is a time window during which Node A's filter contains $x$ but Node B's replica does not. If a client queries the stale replica on Node B for element $x$ during this window, the replica will return false. However, from the perspective of the global system state, $x$ is a member of the set. The system has therefore returned a definitive "no" for an element that actually exists. This is a temporal false negative, induced by the temporal inconsistency of the distributed state \cite{bloom-filters}. This phenomenon has severe implications, as many systems are architected around the assumption that a false from a Bloom filter is an authoritative answer.
+
+\subsubsection{Managing the Global False Positive Rate}
+In a single-instance Bloom filter, the false positive rate (FPR) is a predictable probability. In a distributed system composed of multiple, potentially desynchronized filters, the "global" or "effective" FPR becomes a complex, emergent property. Several factors contribute to this complexity. Out-of-sync replicas degrade the system's overall accuracy. In protocols where filters are merged (e.g., via a bitwise OR), the FPR of the resulting filter depends non-trivially on the degree of overlap in the element sets. In a partitioned system, data skew can cause filters on "hot" partitions to fill up much faster than others. Their individual FPRs will degrade more quickly, and these overloaded filters will disproportionately contribute to the overall system's effective FPR. This complexity means that managing the FPR in a distributed system must transition from a static, upfront calculation into a dynamic, operational monitoring problem \cite{bloom-filters}.
+
+\subsection{Architectural Patterns and Protocols for Synchronization}
+To manage the complexities of distribution, specific architectural patterns have been developed.
+
+\subsubsection{Models for Filter Distribution}
+Three primary models are prevalent, each embodying a different set of trade-offs between consistency, availability, and performance.
+A \textit{Centralized Model} uses a single, logically centralized Bloom filter (e.g., implemented in a service like Redis) as the source of truth. This simplifies consistency but introduces a potential bottleneck and single point of failure \cite{bloom-filters}.
+A \textit{Partitioned Model} uses techniques like consistent hashing to map each element to a specific node, which maintains a filter for its local data partition. This architecture is highly scalable and partition-tolerant \cite{bloom-filters, Distributed_Dynamic_Cuckoo_Filter_System_Based_on_Redis_Cluster.pdf}.
+A \textit{Replicated Model with Event-Driven Updates} maintains a local replica of the global filter on each node, providing the lowest possible read latency. Updates are propagated asynchronously via a messaging system (e.g., Kafka). This model prioritizes read availability but is most susceptible to the temporal false negative paradox due to propagation delays \cite{bloom-filters, dds-osdi}.
+The selection among these models is a direct application of the trade-offs described by the CAP and PACELC theorems, aligning the filter architecture with the fundamental priorities of the application.
+
+\subsubsection{Protocols for Efficient Set Reconciliation}
+In eventually consistent systems, nodes must periodically synchronize their datasets. Transmitting full datasets is prohibitively expensive. Set reconciliation protocols use compact data structures to identify and transmit only the differences. Bloom filters, and particularly Counting Bloom Filters, can be used to probabilistically identify missing or extra elements between two nodes \cite{bloom-filters, 1910.07782v2}. For this specific problem, the Distributed Bloom Filter (DBF) protocol provides a highly communication-efficient solution for guaranteeing eventual consistency \cite{1910.07782v2}.
+
+\begin{definition}[Distributed Bloom Filter Protocol]
+    Let two nodes, $n_i$ and $n_j$, with unique identifiers $ID_i$ and $ID_j$, wish to reconcile their local sets $S_i$ and $S_j$. The DBF protocol employs a unique, pair-wise hash function family $\mathcal{H}_{ij} = \{H_1^{ij}, \ldots, H_k^{ij}\}$. This family is generated using a seed $s_{ij}$, typically computed as $s_{ij} = ID_i \oplus ID_j$. A set of $k$ intermediate hashes $\{h_1^{ij}, \ldots, h_k^{ij}\}$ is derived from $s_{ij}$. For each element $x \in \mathcal{U}$ with a pre-computed hash $H(x)$, the final hash values are computed as:
+    \begin{equation*}
+        H_l^{ij}(x) = (H(x) \oplus h_l^{ij}) \pmod m \quad \forall l \in \{1, \ldots, k\}
+    \end{equation*}
+    This computationally inexpensive method allows for the rapid generation of unique bloom filters for each peer interaction.
+\end{definition}
+
+The protocol deliberately uses small filters with a high individual false positive rate (e.g., 50\%) to minimize bandwidth. While a single exchange is inaccurate, the use of unique mappings for each interaction ensures that hash collisions are statistically independent across successive rounds. True set differences are revealed consistently, while random errors from false positives average out. This sacrifices single-shot accuracy for rapid long-term convergence \cite{1910.07782v2}.
+
+\begin{proposition}[DBF System-Wide Error Rate]
+    Let a system of $N$ nodes use the DBF protocol, where each individual filter has a false positive rate $\varepsilon$. For an element $y \notin \bigcup_{i=1}^N S_i$, the probability that a query for $y$ from a specific node to all of its $N-1$ peers results in a system-wide false positive is $\varepsilon_{\text{System}} = \varepsilon^{N-1}$.
+\end{proposition}
+\begin{proof}
+    Let $\varepsilon = (1 - e^{-kn/m})^k$ be the FPR for a single filter representing a set of size $n$. A system-wide false positive for a query from node $n_j$ regarding an element $y$ occurs if all $N-1$ peers it communicates with independently return a false positive. Let $E_i$ be the event of a false positive from peer $n_i$. The DBF protocol's use of unique seeds $s_{ji}$ for each peer interaction ensures that the hash function families $\mathcal{H}_{ji}$ are statistically independent for each peer $i$. Consequently, the events $E_i$ are independent. The probability of a joint failure across all peers is the product of their individual probabilities. Therefore, $P(\bigcap_{i=1}^{N-1} E_i) = \prod_{i=1}^{N-1} P(E_i) = \varepsilon^{N-1}$.
+\end{proof}
+This result demonstrates that even with a high individual filter error rate $\varepsilon$, the probability that all peers independently produce a false positive for the same element becomes vanishingly small as the number of peers increases, making the DBF an effective protocol for scalable and bandwidth-efficient set reconciliation \cite{1910.07782v2}.
+
+\section{Cuckoo Filters in Distributed Systems: Scaling and Deletion as Architectural Requirements}
+
+The transition from single-node to distributed deployment exposes a structural limitation in Bloom filters that cannot be overcome through parameterization or minor refinement. In distributed systems, dataset cardinality is neither fixed nor predictable. Nodes experience churn; data undergoes compaction and replication; entries acquire expiration semantics. Elements must be deleted, not merely left to decay. A Counting Bloom Filter \ref{def:counting-bloom} addresses deletion through per-position counters, but incurs approximately four-fold space overhead compared to standard Bloom filters \cite{tarkoma2011theory}. More fundamentally, neither variant preserves the algebraic properties required for distributed state reconciliation: the ability to compute set differences and identify true absence versus deletion.
+
+The Cuckoo Filter presents a different architectural path. It natively supports efficient deletion in $O(1)$ time without counters or additional metadata. Furtehrmore, for false positive rates below three percent, it consumes less space than optimized Bloom filters \cite{fan2014cuckoo}. Critically, these properties enable design patterns specifically suited to distributed scalability such as: elastic capacity growth without service interruption, co-location of filters with data partitions, and consistency models that distinguish true absence from deleted membership.
+%  The value of Cuckoo Filters in distributed systems derives not from incremental performance gains but from enabling fundamentally different system architectures.
+
+\subsection{Partial-Key Hashing}
+
+The fundamental challenge in deploying Cuckoo Filters across network boundaries lies in the relocation operation itself. During insertion, when both candidate buckets are full, the filter must displace an existing fingerprint to its alternate location. Standard cuckoo hashing accomplishes this by recomputing the hash of the original element; the element's full key must be available to determine where to move it. In a distributed system, however, filters may be partitioned or replicated across nodes, and the original element may not be co-located with the filter metadata. Retrieving the full element for relocation decisions across network boundaries would introduce prohibitive overhead.
+
+The solution is partial-key cuckoo hashing, introduced by Fan et al., which enables relocation decisions using only the stored fingerprint \cite{fan2014cuckoo}. This capability is the prerequisite for all subsequent distributed patterns.
+
+\begin{definition}[Partial-Key Cuckoo Hashing \cite{fan2014cuckoo}]
+    For an element $x \in \mathcal{U}$ with precomputed fingerprint $f = \textsc{fingerprint}(x)$, the two candidate bucket indices are computed as:
+    \begin{equation*}
+        i_1 = \textsc{hash}(x), \quad i_2 = i_1 \oplus \textsc{hash}(f)
+    \end{equation*}
+    where $\oplus$ denotes bitwise XOR. There is a symmetry that allows us to, given $i_2$ and $f$, recover $i_1$ via the same equation: $i_1 = i_2 \oplus \textsc{hash}(f)$.
+\end{definition}
+
+This symmetry decouples relocation from full-key access. When a fingerprint must be moved from bucket $i_1$ to its alternate location, the system computes the destination using only $f$ and the current position. The fingerprint can traverse network boundaries, be temporarily replicated on different nodes, or be moved as part of partition rebalancing, all without requiring access to the original element. For distributed systems where filters may be stored separately from data, or where data undergoes continuous replication and migration, this property is essential.
+
+\begin{definition}[Cuckoo Filter Core Operations \cite{fan2014cuckoo}]
+    A Cuckoo Filter with $m$ buckets, each containing $b$ entries, supports three operations:
+
+    \textit{Lookup}$(x)$: Compute $i_1 = \textsc{hash}(x)$, $i_2 = i_1 \oplus \textsc{hash}(f)$. Return true if fingerprint $f$ exists in either bucket $i_1$ or $i_2$; otherwise return false. Query always examines at most $2b$ entries.
+
+    \textit{Insert}$(x)$: Compute $i_1, i_2$. If either bucket contains an empty entry, place $f$ there and complete. Otherwise, select one bucket randomly, displace its resident fingerprint $f'$, compute the alternate location for $f'$ using $i \gets i \oplus \textsc{hash}(f')$, and repeat the displacement process. If relocations exceed a configurable threshold (typically 500), insertion fails and a capacity increase is required.
+
+    \textit{Delete}$(x)$: Compute $i_1, i_2$. If $f$ exists in either bucket, remove one copy; otherwise return failure. Deletion requires no counters or additional bookkeeping.
+\end{definition}
+
+We analyze the probability of a false positive, which occurs when an element not in the set hashes to a fingerprint that collides with an existing fingerprint in one of its two candidate buckets. A query inspects at most $2b$ entries across two buckets. This inspection process yields a direct upper bound on the false positive probability, which we state formally.
+
+\begin{proposition}[False Positive Probability Bound \cite{fan2014cuckoo}]
+    Let a Cuckoo Filter be configured with $b$ entries per bucket and a fingerprint length of $f$ bits. The false positive probability $\varepsilon$ satisfies the inequality:
+    \begin{equation*}
+        \varepsilon \leq \frac{2b}{2^f}
+    \end{equation*}
+\end{proposition}
+
+From this inequality, we derive the minimum fingerprint size $f$ required to achieve a target false positive probability $\varepsilon$:
+\begin{equation*}
+    f \geq \lceil \log_2(1/\varepsilon) + \log_2(2b) \rceil
+\end{equation*}
+For a configuration with $b=4$ and a target $\varepsilon=0.01$ (a 1\% false positive rate), this relationship requires a fingerprint size of at least $f \geq \lceil \log_2(100) + \log_2(8) \rceil = \lceil 6.64 + 3 \rceil = 10$ bits. This yields a compact representation that is computationally sufficient to mitigate a high rate of collisions.
+
+The architectural consequences of this design become evident when we consider the delete operation. A standard Bloom filter offers no delete mechanism; removing an element's bits risks corrupting the representation of other stored elements. A Counting Bloom Filter enables deletion but requires per-position counters, which results in a space overhead of approximately four times that of a standard Bloom filter \cite{fan2014cuckoo}. In contrast, the Cuckoo Filter implements deletion by locating the specified fingerprint in one of its two candidate buckets and removing it. This operation requires no auxiliary data structures and directly enables the dynamic distributed architectures we analyze subsequently.
+
+\subsection{Capacity Scaling}
+
+In a distributed system, the cardinality of a dataset is not known \textit{a priori}, requiring any data structure to accommodate significant growth. A Cuckoo Filter of a fixed size cannot accept new insertions once its load factor approaches its theoretical limit. While single-node deployments address this by rebuilding the filter into a larger table offline, such a procedure is untenable in distributed systems that operate under strict availability and latency constraints. A node that halts operations to rebuild its local filter violates service agreements and introduces a point of coordination that undermines distributed design principles.
+
+The Dynamic Cuckoo Filter (DCF), introduced by Chen et al., presents a systematic solution to this scaling problem \cite{chen2017dynamic}. Instead of rebuilding a full filter, the DCF architecture allocates a new, empty filter and appends it to an ordered sequence of filters. All new insertions are directed to the most recently appended filter.
+
+\begin{definition}[Dynamic Cuckoo Filter \cite{chen2017dynamic}]
+    A DCF is an ordered sequence of Cuckoo Filters, $\text{CF}_1, \text{CF}_2, \ldots, \text{CF}_k$. A pointer, $\text{curCF}$, references the terminal filter in the sequence. An insertion operation first attempts placement on $\text{curCF}$. If this insertion fails due to capacity limits, a new filter is allocated, appended to the sequence, and designated as the new $\text{curCF}$. A query operation must traverse this sequence in reverse chronological order, from $\text{curCF}$ to $\text{CF}_1$, until the target fingerprint is found or all filters have been examined.
+\end{definition}
+
+The DCF architecture permits unbounded capacity growth without service interruption, but it achieves this at the cost of query performance. A query for an element $x$ requires a sequential search through the filter chain. If $x$ was inserted into an early filter and the chain has subsequently grown to a length of $k$, the query must inspect all $k$ filters.
+
+\begin{proposition}[DCF Query Complexity]
+    A membership query in a DCF composed of $k$ constituent filters requires $O(k)$ bucket accesses in the worst case. For a system containing $n$ total items, where each filter maintains a load factor $\alpha \approx 0.95$ and has a capacity of $C$ items, the number of filters scales as $k = \Theta(n/C)$. Consequently, query latency grows proportionally with the total dataset size.
+\end{proposition}
+
+This architectural pattern creates a direct conflict between capacity scaling and query performance. The mechanism that enables system growth is the same mechanism that causes query latency to degrade. For modern distributed systems where query latency is a critical performance metric—such as in data serving, caching, and real-time analytics—a linear growth in query time is architecturally unacceptable.
+
+The linear query complexity arises because the DCF organizes its constituent filters temporally, by insertion order, rather than deterministically by element hash value. No direct mapping exists between an element's content and the specific filter that contains it. Membership testing therefore degenerates to a sequential search, an operation incompatible with the constant-time query requirements of scalable distributed systems.
+
+\subsection{Decoupling Scaling and Performance via Consistent Hashing}
+
+The linear degradation in query performance of the Dynamic Cuckoo Filter arises from its temporal organization. We observe that distributed systems have already addressed analogous scaling challenges for data partitioning. Architectures such as Apache Cassandra, Redis Cluster, and DynamoDB employ consistent hashing to distribute their keyspace \cite{cassandra2014, redis2020}. In these systems, nodes are assigned token ranges on a virtual hash ring. An element's hash value deterministically maps it to a specific point on the ring, and thus to a responsible node. The addition or removal of a node requires remapping only a localized subset of the keyspace, preserving a stable and deterministic mapping for the majority of data.
+
+This same principle can be applied to the organization of a Cuckoo Filter's buckets. Instead of organizing filters in a temporal sequence, we can distribute the buckets themselves across a consistent hash ring. This architectural shift aligns the filter's structure with established distributed partitioning schemes.
+
+\begin{definition}[Index-Independent Cuckoo Filter \cite{luo2021capacity}]
+    An Index-Independent Cuckoo Filter (I2CF) maintains its buckets on a consistent hash ring. For an element $x$ with fingerprint $f$, its candidate bucket locations are determined by hashing the element to points on this ring. The system identifies the first bucket successor to each of these points on the ring as a candidate bucket.
+\end{definition}
+
+The defining property of the I2CF is that bucket identifiers depend only on the element's hash value, not on the total number of buckets $m$ in the system. Capacity expansion is achieved by adding a new bucket to a chosen position on the ring. This operation necessitates relocating only those elements whose hash values fall within the range immediately preceding the new bucket's position. For a system with $n$ items distributed across $m$ buckets, a rebalancing event affects an expected $O(n/m)$ items, a small fraction of the total dataset.
+
+This design decouples capacity growth from query complexity, resolving the architectural conflict present in the DCF.
+
+\begin{theorem}[I2CF Query Complexity]
+    For an I2CF with $m$ buckets organized on a consistent hash ring, a membership query for an element $x$ requires a sequence of constant-time operations: (1) hash computations to determine ring positions, (2) a ring lookup to identify candidate buckets (achievable in $O(1)$ expected time with an appropriate auxiliary index), and (3) inspection of entries within those buckets. The total query complexity is therefore $O(1)$, independent of the total number of items $n$ and the total number of buckets $m$.
+\end{theorem}
+
+The I2CF architecture resolves the conflation of capacity management and element mapping found in the DCF. The DCF modifies the element-to-filter mapping to accommodate growth, leading to performance degradation. In contrast, the I2CF maintains a fixed, deterministic mapping from elements to ring positions while allowing the set of buckets to expand elastically. As a result, growth and query performance become orthogonal concerns.
+
+\subsection{Co-Partitioning Filters with Distributed Data}
+
+We observe that the architectural value of the Index-Independent Cuckoo Filter is most fully realized when its partitioning scheme is aligned with that of the host distributed system. Many distributed key-value stores partition their keyspace across a set of nodes using a consistent hash ring. In such systems, each node assumes responsibility for one or more token ranges on the ring.
+
+We apply this same partitioning logic to the filter's buckets, an approach whose efficacy is demonstrated by Luo et al. in their work on distributed filters over Redis Cluster \cite{luo2018distributed}. We formalize this alignment as a co-partitioned filter architecture.
+
+\begin{definition}[Co-Partitioned Filter Architecture \cite{luo2018distributed}]
+    A distributed system of $m$ nodes maintains a consistent hash ring, where each node $n_i$ is assigned responsibility for a token range $[t_i, t_{i+1})$. The node maintains: (1) all data items $d$ such that $H(d) \in [t_i, t_{i+1})$, and (2) all Cuckoo Filter buckets $b$ such that $\text{position}(b) \in [t_i, t_{i+1})$. A membership query for an element $x$ is routed to the node responsible for the token range containing $H(x)$ for local processing.
+\end{definition}
+
+This architecture has direct performance implications. A query processed on the node that owns the element's token range incurs only the cost of local memory access. A query originating from a different node requires a single network round-trip. The latency difference between local memory access (microseconds) and network communication (milliseconds) is typically three to four orders of magnitude.
+
+We can model the expected query latency for this architecture under a uniform query distribution. In a system with $m$ nodes, a randomly routed query has a probability $1/m$ of being processed locally and a probability $(1 - 1/m)$ of requiring network transit. This leads to the following formulation for the expected query latency.
+
+\begin{theorem}[Co-Partitioned Query Latency]
+    In a co-partitioned I2CF architecture of $m$ nodes under a uniform query distribution, the expected query latency $\mathbb{E}[L_q]$ is given by:
+    \begin{equation*}
+        \mathbb{E}[L_q] = \frac{1}{m} t_{\text{local}} + \left(1 - \frac{1}{m}\right) t_{\text{network}}
+    \end{equation*}
+    where $t_{\text{local}}$ represents local bucket access time and $t_{\text{network}}$ represents network round-trip latency.
+\end{theorem}
+
+This latency bound is independent of the total dataset size $n$. Query performance is determined by hardware characteristics and system scale ($m$), not by the number of elements stored.
+
+The alignment creates a synergy with the underlying infrastructure of many distributed systems. By reusing an existing consistent hashing ring, the system gains a scalable membership testing capability with minimal additional coordination overhead. Fault tolerance mechanisms, such as data replication, can be extended to include filter buckets, allowing replicated filter state to propagate through existing replication channels.
+
+The experimental results in \cite{luo2018distributed} confirm the efficacy of this approach, demonstrating significant memory savings over Bloom filter alternatives, full support for deletions, and seamless capacity scaling as nodes are added to the cluster.
+
+\subsection{Hierarchical Elasticity for Non-Uniform Growth Rates}
+
+While the I2CF architecture provides fine-grained, bucket-level elasticity, its rebalancing mechanism is most effective under predictable, incremental growth in dataset cardinality. Distributed systems, however, often experience non-uniform growth patterns, including sudden spikes in insertion rates. In such scenarios, where the rate of cardinality growth exceeds the rate at which new buckets can be added and populated, the system may experience cascading insertion failures.
+
+To address this class of workloads, we analyze the Consistent Cuckoo Filter (CCF), an architecture that introduces a second, coarser tier of elasticity by organizing a collection of independent I2CF instances \cite{luo2021capacity}.
+
+\begin{definition}[Consistent Cuckoo Filter \cite{luo2021capacity}]
+    A CCF is a collection of I2CF instances, $\{I_1, I_2, \ldots, I_s\}$, initially with $s=1$. Insertions are directed to a designated active instance, typically $I_s$. When $I_s$ reaches a predefined load factor threshold, a new, empty instance $I_{s+1}$ is allocated and becomes the active target for subsequent insertions. A query operation must inspect all instances in the collection until the target fingerprint is found.
+\end{definition}
+
+This architecture allows the system to increase its total capacity instantly by adding a new, untapped I2CF. However, this "scale-out" mechanism, if left unmanaged, structurally resembles the chaining model of the Dynamic Cuckoo Filter. A query must probe every instance in the collection, leading to a performance dependency on the number of instances, $s$.
+
+\begin{proposition}[CCF Unmanaged Query Complexity]
+    In a CCF where new, fixed-capacity I2CF instances are added sequentially without any consolidation, the number of instances $s$ grows linearly with the total number of items $n$. The worst-case query complexity is therefore $O(s)$, which is equivalent to $O(n)$.
+\end{proposition}
+
+\begin{proof}
+    Let $n$ be the total number of items and let each I2CF instance have an effective capacity of $C$ items (e.g., $C = m \cdot b \cdot \alpha$, where $m$ is the number of buckets, $b$ is the entries per bucket, and $\alpha$ is the target load factor). In an unmanaged growth model, a new instance is added every time the system has stored an additional $C$ items. The number of instances $s$ required to store $n$ items is therefore $s = \lceil n/C \rceil$. As $n \to \infty$, this gives $s = \Theta(n)$. Since a query must inspect all $s$ instances in the worst case, the query complexity is $O(s) = O(n)$.
+\end{proof}
+
+The CCF architecture as defined by Luo et al. explicitly includes management policies to prevent this linear degradation \cite{luo2021capacity}. It is not merely a chain of filters but a managed system that provides hierarchical scaling. This system operates at two granularities. The first is a fine-grained, bucket-level elasticity, where capacity adjustments occur within each constituent I2CF by adding or removing buckets from its consistent hash ring. The second is a coarse-grained, filter-level elasticity, which accommodates sudden load spikes by adding entire new I2CF instances. To control the growth of query latency, the architecture incorporates a consolidation mechanism, which periodically merges under-utilized instances to reduce the total number of instances, $s$. This hierarchical approach allows the system to manage capacity at multiple granularities, handling gradual growth through the fine-grained mechanism and absorbing sudden traffic spikes by adding new instances, while maintaining long-term performance through background consolidation.
+
+\subsection{Concurrency Control Strategies for Distributed Cuckoo Filters}
+
+The deployment of Cuckoo Filters in a distributed environment introduces concurrency hazards. During an insertion operation, the filter performs a sequence of displacements that modify multiple bucket locations. A concurrent query examining these locations during this transient state may fail to find an element that has been evicted from its original bucket but not yet placed in its alternate location. This race condition, which we term a \emph{false miss}, results in a definitive negative answer for an element present in the set, thereby violating the data structure's membership guarantee.
+
+We analyze three distinct concurrency control strategies, each designed to resolve the false-miss problem for a specific system architecture and workload pattern.
+
+The first strategy, optimistic concurrency, is designed for read-dominant workloads, such as those found in caching systems. Fan et al. developed this model for the MemC3 system \cite{fan2013memc3}. The model serializes write operations while allowing multiple readers to proceed without locks, using version counters for synchronization. A key component of this model is the execution order of relocations along a displacement chain. After identifying a valid path, the system moves the last element in the chain into the empty slot first, which frees a new slot. The second-to-last element is then moved into this newly vacated slot. This reverse-order execution ensures that every element being relocated remains accessible in at least one of its two candidate buckets at all times.
+
+\begin{definition}[Optimistic Cuckoo Hashing \cite{fan2013memc3}]
+    A writer maintains a version counter for each bucket. Before initiating relocations, it identifies a valid displacement path (e.g., $a \to b \to c \to \text{empty}$) without acquiring locks. The relocations are then executed in reverse order, with each move incrementing the version counter of the involved bucket. A reader records the versions of its two candidate buckets before inspection and re-checks them afterward. If any version has changed, the reader discards its result and retries the operation.
+\end{definition}
+
+This strategy is highly effective for workloads where the read-to-write ratio is high, as readers do not incur lock acquisition overhead.
+
+For general-purpose multi-core systems with more balanced read-write workloads, we analyze a fine-grained locking model that enables greater writer parallelism. The libcuckoo library\footnote{\url{https://github.com/efficient/libcuckoo}} implements this model using lock striping, where an array of independent locks protects disjoint sets of buckets \cite{li2014algorithmic, li2023lock}. A thread acquires locks only for the buckets involved in its operation, which permits concurrent write operations on non-overlapping regions of the filter.
+
+For disaggregated memory architectures that utilize Remote Direct Memory Access (RDMA), in-memory locking mechanisms are inapplicable. Clients access remote memory directly over the network. Grant et al. developed RCuckoo for this environment, which employs a lease-based locking protocol \cite{grant2025cuckoo}. In this model, clients acquire time-bounded leases on remote buckets via atomic RDMA operations. The automatic expiration of these leases provides fault tolerance to client failures without requiring explicit recovery protocols.
+
+\begin{definition}[Lease-Based Locking for RDMA \cite{grant2025cuckoo}]
+    Each bucket in remote memory maintains a lease counter and an expiration timestamp. A client requests a lease by issuing an RDMA compare-and-swap operation that atomically increments the counter, succeeding only if the current time exceeds the previous lease's expiration. Upon acquiring the lease, the client records a new expiration time, performs its operation, and subsequently releases the lease. If a client fails, the lease expires after its designated duration, allowing other clients to acquire it.
+\end{definition}
+
+We note that across all three concurrency models, the no-false-negatives property of the Cuckoo Filter remains invariant. A query that returns false provides a correct answer: the element is not, and has never been (unless subsequently deleted), a member of the set. The specific concurrency strategy is an implementation detail dictated by the hardware topology and workload, but the membership guarantee is preserved.
+
+\subsection{Replication and Convergence in Eventually Consistent Systems}
+
+When we replicate Cuckoo Filters across multiple nodes for fault tolerance, the replicas may temporarily diverge due to network latency in propagating updates. We analyze the consequences of this divergence, particularly for deletion operations, and compare the behavior of Cuckoo Filters to that of standard and Counting Bloom Filters.
+
+A standard Bloom filter provides no mechanism for deletion; elements, once inserted, remain in the filter indefinitely. A Counting Bloom Filter supports deletion by decrementing counters but at the cost of an approximately four-fold increase in space overhead \cite{fan2014cuckoo}. A Cuckoo Filter, by contrast, implements deletion as a direct removal of the element's fingerprint.
+
+In a replicated environment, this distinction becomes architecturally significant. Consider a Cuckoo Filter replicated on nodes $n_1$ and $n_2$. An insertion of element $x$ on $n_1$ propagates asynchronously to $n_2$. During the propagation window, a query for $x$ on $n_2$ will return false. This behavior, a form of temporal false negative, is inherent to any asynchronously replicated system.
+
+The key difference emerges in deletion scenarios, a problem central to systems that use tombstones to mark deleted data under eventual consistency \cite{mosharraf2022improving}. When element $x$ is deleted on $n_1$, its fingerprint is immediately removed from the local filter. During the propagation window, a query for $x$ to $n_1$ correctly returns false, while a query to $n_2$ returns a stale positive. Once the deletion operation propagates to $n_2$, its fingerprint is also removed, and both nodes converge to a consistent state where $x$ is correctly identified as absent.
+
+A Bloom filter behaves differently. Since it cannot remove the element, it will continue to return positive for the deleted key indefinitely. This forces the system to perform expensive validation lookups against the backing data store merely to discover a tombstone, negating much of the filter's performance benefit in workloads with frequent deletions \cite{mosharraf2022improving}.
+
+\begin{proposition}[Cuckoo Filter Replication Convergence]
+    In an eventually consistent system with replicated Cuckoo Filters, let an element $x$ be inserted at time $t_i$ and deleted at time $t_d > t_i$. For any replica $r$, there exist propagation delays such that the insertion is applied at time $\tau_i \geq t_i$ and the deletion is applied at time $\tau_d \geq t_d$. For all times $t > \tau_d$, a query for $x$ on replica $r$ will deterministically return false. In contrast, a standard Bloom filter provides no upper bound on the time until a query for a deleted element ceases to return a positive result.
+\end{proposition}
+
+This property enables Cuckoo Filters to converge more rapidly to the true state of the system, especially in environments with frequent deletions. For distributed systems implementing eventual consistency, this allows the filter's state to accurately track operations such as the purging of tombstones during compaction or garbage collection. The ability to remove fingerprints, rather than merely marking them for future cleanup, ensures that the filter remains a reliable oracle for the live, non-deleted state of the dataset.
+
+\subsection{Impact on Distributed System Architectures}
+
+We analyze the concrete architectural impact of Cuckoo Filters in several domains where distributed systems require both efficient membership testing and dynamic element deletion.
+
+Our first application domain is Log-Structured Merge-Tree (LSM-tree) based key-value stores. In these systems, data is organized into immutable, sorted files on disk (SSTables), each typically indexed by an in-memory filter. Deletions are often handled by writing a tombstone marker rather than by immediate data removal \cite{mosharraf2022improving}. A standard Bloom filter, being unable to remove entries, continues to return a positive match for a deleted key. This behavior forces the database to perform a disk I/O operation only to discover the tombstone, incurring unnecessary latency. A Cuckoo Filter resolves this inefficiency. During data compaction, the fingerprint corresponding to a purged tombstone can be removed from the filter. Subsequent queries for the deleted key will correctly return false, eliminating the wasted I/O. The Chucky architecture further exploits this by unifying the multiple per-level filters of an LSM-tree into a single Cuckoo Filter, which reduces the point query complexity from $O(\text{number of levels})$ to $O(1)$ \cite{dayan2020chucky}.
+
+In named-data networking (NDN), we examine the Pending Interest Table (PIT), which tracks outstanding content requests. The DiCuPIT system utilizes distributed Cuckoo Filters to replace traditional Bloom filter-based implementations. This architectural change yields a 36\% reduction in lookup time and a 31\% reduction in memory consumption compared to Bloom filter baselines \cite{mahmoudi2023dicupit}. The primary advantage is the ability to correctly and efficiently delete PIT entries as their corresponding data responses arrive, a fundamental operation that standard Bloom filters cannot support.
+
+Our third domain is state synchronization in blockchain networks. Nodes in these systems maintain a mempool of pending transactions. To propagate a new block efficiently, the Gauze protocol employs Cuckoo Filters to summarize the contents of a node's mempool \cite{kim2022gauze}. A node propagating a block sends this compact filter to its peers. The receiving nodes use the filter to identify which transactions in the new block are absent from their local mempool and request only this delta. This method reduces block propagation bandwidth by 40 to 50\%. The efficiency gain is a direct result of the filter's compact representation; a filter for a million-element set requires only a few megabytes of space.
+
+These applications demonstrate a shared architectural requirement: efficient support for both insertion and deletion in resource-constrained environments, where the primary bottlenecks are network bandwidth, I/O latency, or processing throughput. The ability to delete elements distinguishes the Cuckoo Filter from the Bloom filter not as an incremental improvement, but as an enabling architectural property. It facilitates correct state reconciliation, efficient rebalancing under dynamic scaling, and accurate membership semantics in systems where the lifecycle of data includes explicit deletion.

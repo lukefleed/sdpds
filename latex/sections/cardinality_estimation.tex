@@ -1,0 +1,184 @@
+The cardinality estimation problem requires computing $|\text{distinct}(S)|$ for a multiset $S$ of elements from universe $\mathcal{U}$. In distributed systems, $S = \bigcup_{i=1}^N S_i$ where $S_i$ denotes the local multiset at node $i$, and we seek $|S|$ without data centralization. Exact computation necessitates $\Omega(|S| \log |\mathcal{U}|)$ bits to maintain $S$ explicitly - prohibitive for large cardinalities (e.g., counting distinct IP addresses in CDN logs with $10^9$ requests).
+
+Probabilistic cardinality estimators accept bounded relative error in exchange for sublinear space. The HyperLogLog (HLL) algorithm~\cite{flajolet2007hyperloglog} achieves standard error $\sigma \approx 1.04/\sqrt{m}$ using $m$ registers of $\log_2 \log_2 |\mathcal{U}| + O(1)$ bits each, where $m$ controls accuracy. For $m = 2^{14}$, error is $\approx 0.81\%$ with space $\approx 12$ KB, independent of $|S|$.
+
+\subsection{Algorithmic Foundation: Probabilistic Counting}
+
+HyperLogLog rests on a statistical observation regarding uniform hash functions. Let $h : \mathcal{U} \to [0, 1)$ map elements uniformly to the unit interval. Represent $h(x)$ in binary as $h(x) = 0.b_1 b_2 b_3 \ldots$ where $b_i \in \{0,1\}$. Define $\rho(x)$ as the position of the leftmost $1$-bit:
+\begin{equation}
+    \rho(x) \equiv \min\{i \geq 1 : b_i = 1\}
+\end{equation}
+Equivalently, $\rho(x)$ counts leading zeros plus one. For uniform $h$, $h(x)$ is uniformly distributed on $[0,1)$, so its binary representation has independent, identically distributed bits $b_i \sim \text{Bernoulli}(1/2)$.
+
+\begin{lemma}[Geometric Distribution of $\rho$]\label{lem:rho-geometric}
+    For uniform hash function $h$ and random element $x \in \mathcal{U}$:
+    \begin{equation}
+        \Pr[\rho(x) \geq k] = 2^{-(k-1)} \quad \text{for } k \geq 1
+    \end{equation}
+    Equivalently, $\Pr[\rho(x) = k] = 2^{-k}$ for $k \geq 1$.
+\end{lemma}
+
+\begin{proof}
+    Event $\rho(x) \geq k$ occurs iff the first $k-1$ bits of $h(x)$ are zero: $b_1 = b_2 = \cdots = b_{k-1} = 0$. Since $h$ is uniform, each bit $b_i$ is independently $0$ or $1$ with equal probability:
+    \begin{align}
+        \Pr[\rho(x) \geq k] & = \Pr[\bigwedge_{i=1}^{k-1} b_i = 0] = \prod_{i=1}^{k-1} \Pr[b_i = 0] \notag \\
+                            & = \left(\frac{1}{2}\right)^{k-1} = 2^{-(k-1)}
+    \end{align}
+    The probability mass function follows:
+    \begin{align}
+        \Pr[\rho(x) = k] & = \Pr[\rho(x) \geq k] - \Pr[\rho(x) \geq k+1] \notag \\
+                         & = 2^{-(k-1)} - 2^{-k} = 2^{-k}
+    \end{align}
+\end{proof}
+
+\begin{theorem}[Probabilistic Cardinality Bound]\label{thm:rmax-estimate}
+    Let $S$ be a multiset with $n = |\text{distinct}(S)|$ elements. Define $R \equiv \max_{x \in S} \rho(x)$. Then $2^R$ serves as a biased estimator of $n$, with expectation:
+    \begin{equation}
+        \mathbb{E}[2^R] = n \cdot \phi(n) + O(1)
+    \end{equation}
+    where $\phi(n)$ is a function that oscillates around $1$. The value $R$ concentrates around $\log_2 n$.
+\end{theorem}
+
+\begin{proof}
+    The probability that no element in $S$ achieves $\rho(x) \geq k$ is:
+    \begin{equation}
+        \Pr[R < k] = \prod_{x \in S} \Pr[\rho(x) < k] = (1 - 2^{-(k-1)})^n
+    \end{equation}
+    For $k = \log_2 n + c$ where $c$ is constant:
+    \begin{equation}
+        \Pr[R < \log_2 n + c] = \left(1 - \frac{2}{n}\right)^n \to e^{-2} \text{ as } n \to \infty
+    \end{equation}
+    This shows $R \approx \log_2 n$ with constant probability. For the expectation of $2^R$, note that:
+    \begin{equation}
+        \mathbb{E}[2^R] = \sum_{k=1}^\infty 2^k \Pr[R = k] = \sum_{k=1}^\infty 2^k \bigl(\Pr[R \geq k] - \Pr[R \geq k+1]\bigr)
+    \end{equation}
+    Using $\Pr[R \geq k] = 1 - (1 - 2^{-(k-1)})^n$ and asymptotic analysis, Flajolet et al.~\cite{flajolet2007hyperloglog} show $\mathbb{E}[2^R] = n \cdot \phi(n) + O(1)$ where $\phi(n)$ oscillates around $1$ with amplitude $O(10^{-15})$, yielding $\mathbb{E}[2^R] \approx n$ for practical purposes.
+\end{proof}
+
+\subsection{The HyperLogLog Algorithm}
+
+Theorem~\ref{thm:rmax-estimate} suggests using $2^R$ as a cardinality estimator, but $R$ exhibits high variance. HyperLogLog reduces variance via stochastic averaging: partition the input stream into $m$ substreams using the first $b = \log_2 m$ bits of the hash, maintain independent $R$ values (registers) for each substream, and combine via harmonic mean.
+
+\begin{definition}[HyperLogLog Sketch]\label{def:hll}
+    An HLL sketch with parameter $m = 2^b$ consists of:
+    \begin{enumerate}
+        \item An array $M[0 \ldots m-1]$ of registers, each initially $0$
+        \item A hash function $h : \mathcal{U} \to \{0, 1\}^L$ where $L \gg b$
+    \end{enumerate}
+\end{definition}
+
+The $\textsc{Add}(x)$ operation computes $w = h(x)$, splits it into prefix $w_1 = w[0:b]$ (first $b$ bits) and suffix $w_2 = w[b:L]$ (remaining bits), determines bucket index $j = \langle w_1 \rangle \in [0, m-1]$, computes $\rho_w = \text{LeadingZeros}(w_2) + 1$, and updates $M[j] \leftarrow \max(M[j], \rho_w)$.
+
+The $\textsc{Count}()$ operation first computes $Z = \sum_{j=0}^{m-1} 2^{-M[j]}$ and the raw estimate $\hat{n}_{\text{raw}} = \alpha_m m^2 / Z$. It then counts zero registers $V = |\{j : M[j] = 0\}|$ and applies range corrections: if $\hat{n}_{\text{raw}} \leq 2.5m$ and $V > 0$, return $m \log(m/V)$ (small range); else if $\hat{n}_{\text{raw}} > 2^{32}/30$, return $-2^{32} \log(1 - \hat{n}_{\text{raw}}/2^{32})$ (large range); otherwise return $\hat{n}_{\text{raw}}$.
+
+The bucket index and leftmost bit position satisfy $j \equiv \langle w_1 \rangle \in [m]$ and $\rho_w \equiv \rho(0.w_2)$, while the raw estimate is:
+\begin{equation}\label{eq:hll-raw}
+    \hat{n}_{\text{raw}} = \alpha_m \cdot m^2 \cdot \left(\sum_{j=0}^{m-1} 2^{-M[j]}\right)^{-1}
+\end{equation}
+
+\begin{theorem}[HyperLogLog Accuracy]\label{thm:hll-accuracy}
+    Let $n$ denote the true cardinality. The HLL estimate $\hat{n}_{\text{raw}}$ from \eqref{eq:hll-raw} satisfies:
+    \begin{equation}
+        \mathbb{E}[\hat{n}_{\text{raw}}] = n + \epsilon_m(n)
+    \end{equation}
+    where $\epsilon_m(n) = O(1)$ is a small bias term. The standard error is:
+    \begin{equation}\label{eq:hll-stderr}
+        \sigma(\hat{n}_{\text{raw}}) = \frac{\beta_m}{\sqrt{m}} \cdot n
+    \end{equation}
+    where $\beta_m \to 1.04$ as $m \to \infty$.
+\end{theorem}
+
+The constant $\alpha_m$ in \eqref{eq:hll-raw} corrects for systematic bias from the harmonic mean. The full derivation, involving Mellin transforms and depoissonization, appears in Flajolet et al.~\cite{flajolet2007hyperloglog}. For $m \ge 16$, the paper provides the approximation:
+\begin{equation}\label{eq:alpha-m}
+    \alpha_m \approx \frac{0.7213}{1 + 1.079/m}
+\end{equation}
+
+The raw estimator \eqref{eq:hll-raw} exhibits systematic bias for very small and very large cardinalities. Flajolet et al.~\cite{flajolet2007hyperloglog} introduce empirical corrections to address this. For small cardinalities ($\hat{n}_{\text{raw}} \leq 2.5m$), if $V$ registers remain zero ($M[j] = 0$), apply linear counting:
+\begin{equation}\label{eq:small-range}
+    \hat{n} = m \log(m/V)
+\end{equation}
+This exploits the occupancy information: when few elements have been inserted, many buckets remain empty, and the number of empty buckets provides a more accurate signal than the harmonic mean.
+
+For large cardinalities ($\hat{n}_{\text{raw}} > 2^{32}/30$ for 32-bit hashes), apply exponential bias correction:
+\begin{equation}\label{eq:large-range}
+    \hat{n} = -2^{32} \log\left(1 - \frac{\hat{n}_{\text{raw}}}{2^{32}}\right)
+\end{equation}
+This corrects for hash collisions when $n$ approaches the hash range $2^{32}$. These corrections bound the relative error $|\hat{n} - n|/n$ uniformly over $n \in [1, 2^{32}]$.
+
+\subsection{Distributed Aggregation via Sketch Merging}
+
+The architectural significance of HyperLogLog for distributed systems derives from the mergeability of sketches. Two sketches $M^{(1)}, M^{(2)}$ representing sets $S_1, S_2$ combine to yield a sketch for $S_1 \cup S_2$ via componentwise maximum:
+\begin{equation}\label{eq:hll-merge}
+    M^{(1 \cup 2)}[j] \equiv \max(M^{(1)}[j], M^{(2)}[j]) \quad \forall j \in [m]
+\end{equation}
+
+\begin{theorem}[Algebraic Properties of HLL Merge]\label{thm:hll-merge}
+    Define the merge operation $\oplus : \{0,1,\ldots,L\}^m \times \{0,1,\ldots,L\}^m \to \{0,1,\ldots,L\}^m$ by $(M^{(1)} \oplus M^{(2)})[j] \equiv \max(M^{(1)}[j], M^{(2)}[j])$ for all $j \in [m]$. Then:
+    \begin{enumerate}
+        \item Commutativity: $M^{(1)} \oplus M^{(2)} = M^{(2)} \oplus M^{(1)}$
+        \item Associativity: $(M^{(1)} \oplus M^{(2)}) \oplus M^{(3)} = M^{(1)} \oplus (M^{(2)} \oplus M^{(3)})$
+        \item Idempotence: $M \oplus M = M$
+    \end{enumerate}
+\end{theorem}
+
+\begin{proof}
+    All properties follow from corresponding properties of $\max : \mathbb{R} \times \mathbb{R} \to \mathbb{R}$.
+
+    (1) Commutativity: For any $a, b \in \mathbb{R}$, $\max(a, b) = \max(b, a)$. Thus $M^{(1)} \oplus M^{(2)}$ and $M^{(2)} \oplus M^{(1)}$ coincide componentwise.
+
+    (2) Associativity: For any $a, b, c \in \mathbb{R}$, $\max(\max(a, b), c) = \max(a, \max(b, c))$. Thus $(M^{(1)} \oplus M^{(2)}) \oplus M^{(3)}$ and $M^{(1)} \oplus (M^{(2)} \oplus M^{(3)})$ coincide componentwise.
+
+    (3) Idempotence: For any $a \in \mathbb{R}$, $\max(a, a) = a$. Thus $M \oplus M$ and $M$ coincide componentwise.
+\end{proof}
+
+Consider a MapReduce-style computation where $N$ mapper nodes each maintain a local HLL sketch $M^{(i)}$ for their data partition $S_i$. To compute the global cardinality $|\bigcup_{i=1}^N S_i|$, the system executes the following workflow. In Phase 1, each mapper $i$ initializes $M^{(i)} = [0, 0, \ldots, 0]$ ($m$ registers) and processes each element $x \in S_i$ by invoking $\textsc{Add}(x)$ on $M^{(i)}$. In Phase 2, each mapper $i$ transmits $M^{(i)}$ to the reducer. In Phase 3, the reducer initializes $M^{(\text{global})} = M^{(1)}$ and for $i = 2, \ldots, N$ computes $M^{(\text{global})}[j] \leftarrow \max(M^{(\text{global})}[j], M^{(i)}[j])$ for all $j = 0, \ldots, m-1$. In Phase 4, the reducer returns $\textsc{Count}(M^{(\text{global})})$.
+
+Each mapper processes its local stream in $O(|S_i|)$ time. Mappers transmit sketches totaling $O(Nm \log L)$ bits, where $L = \log_2 \log_2 |\mathcal{U}| + O(1)$ is register bitwidth. The reducer computes $M^{(\text{global})} = \bigoplus_{i=1}^N M^{(i)}$ in $O(Nm)$ time, then invokes \textsc{Count}() in $O(m)$ time.
+
+\begin{theorem}[Communication Complexity of Distributed HLL]\label{thm:hll-comm}
+    Computing the cardinality of the union of $N$ sets, each of size at most $n$, requires $O(Nm \log \log |\mathcal{U}|)$ communication using HLL, compared to $O(Nn \log |\mathcal{U}|)$ for exact set union.
+\end{theorem}
+
+\begin{proof}
+    Exact union requires each node to transmit its local set, costing $\sum_{i=1}^N |S_i| \log |\mathcal{U}| \leq Nn \log |\mathcal{U}|$ bits. HLL requires transmitting $N$ sketches, each of size $m \log \log |\mathcal{U}| + O(m)$ bits (since each register stores values in $[0, \log_2 |\mathcal{U}|]$, requiring $\log_2 \log_2 |\mathcal{U}| + O(1)$ bits). Total: $O(Nm \log \log |\mathcal{U}|)$ bits.
+\end{proof}
+
+The communication savings factor is:
+\begin{equation}\label{eq:comm-ratio}
+    \frac{Nm \log \log |\mathcal{U}|}{Nn \log |\mathcal{U}|} = \frac{m \log \log |\mathcal{U}|}{n \log |\mathcal{U}|}
+\end{equation}
+For typical parameters ($m = 2^{14}$, $|\mathcal{U}| = 2^{64}$, $n = 10^9$): this ratio is $(16384 \cdot 6)/(10^9 \cdot 64) \approx 1.5 \times 10^{-6}$, representing a six-order-of-magnitude reduction.
+
+Theorem~\ref{thm:hll-merge} (associativity) enables hierarchical aggregation. Organize nodes into a binary tree where each internal node merges sketches from its children and propagates the result upward. This reduces latency from $O(N)$ (sequential merging at single reducer) to $O(\log N)$ (tree height) and distributes computational load across intermediate aggregators.
+
+The algebraic properties in Theorem~\ref{thm:hll-merge} are critical for distributed systems:
+\begin{enumerate}
+    \item Commutativity enables out-of-order aggregation, allowing sketches to arrive asynchronously without affecting the result
+    \item Associativity permits arbitrary aggregation topologies (trees, DAGs), enabling load balancing and fault tolerance via redundant paths
+    \item Idempotence ensures duplicate sketch transmissions (e.g., due to retries) do not corrupt the estimate
+\end{enumerate}
+These properties align HLL perfectly with frameworks like MapReduce, Apache Spark, and stream processing systems (Flink, Storm) where data flows through acyclic aggregation graphs.
+
+\subsection{Space-Error Tradeoffs and Practical Considerations}
+
+Equation \eqref{eq:hll-stderr} establishes the space-accuracy relationship: to achieve relative error $\sigma$, HLL requires $m = \Theta(1/\sigma^2)$ registers. Each register must store a value representing the maximum number of leading zeros. With a 64-bit hash function and $b = \log_2 m$ bits used for the register index, the remaining hash suffix has $64-b$ bits. The number of leading zeros is at most $64-b$, making the maximum stored value $64-b+1$. For any practical choice of $m$ (e.g., $m \geq 16$, so $b \geq 4$), this maximum is less than 64. Therefore, 6 bits per register (allowing values $0-63$) are sufficient.
+
+\begin{table}[h]
+    \centering
+    \small
+    \begin{tabular}{|c|c|c|c|}
+        \hline
+        $m$ (registers)  & Space (bytes) & $\sigma$ (\%) & Relative Error 95\% CI \\
+        \hline
+        $2^{10} = 1024$  & 768           & 3.25\%        & $\pm 6.5\%$            \\
+        $2^{12} = 4096$  & 3 KB          & 1.625\%       & $\pm 3.25\%$           \\
+        $2^{14} = 16384$ & 12 KB         & 0.81\%        & $\pm 1.62\%$           \\
+        $2^{16} = 65536$ & 48 KB         & 0.41\%        & $\pm 0.82\%$           \\
+        \hline
+    \end{tabular}
+    \caption{Space-accuracy tradeoffs for HyperLogLog. Space assumes 6-bit registers, sufficient for a $2^{64}$ universe. $\sigma$ is computed via $1.04/\sqrt{m}$. The relative error gives the approximate 95\% confidence interval $\pm 2\sigma$.}
+\end{table}
+
+Exact count via hash table storing distinct elements requires space proportional to $n$. For $n = 10^9$ elements with 64-bit identifiers, exact storage needs $8$ GB. HLL with $m = 2^{14}$ achieves $\sigma = 0.81\%$ using only $12$ KB, a space reduction factor of approximately $6.7 \times 10^5$. This enables cardinality estimation in severely memory-constrained environments such as network switches, IoT devices, and other embedded systems.
+
+The mathematical elegance of HyperLogLog, achieving $\sigma = O(1/\sqrt{m})$ with $O(m)$ space and $O(1)$ per-element update time, establishes it as a canonical example of probabilistic streaming algorithms. The merge operation's algebraic properties (Theorem~\ref{thm:hll-merge}) align perfectly with distributed aggregation frameworks, explaining its widespread adoption in large-scale data processing systems.

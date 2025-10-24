@@ -1,0 +1,13 @@
+*.aux
+*.log
+*.out
+*.toc
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.nav
+*.snm
+fact_check_*
+.clinerules
+*.bbl
+*.blg
