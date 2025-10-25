@@ -4,19 +4,19 @@ We consider the dictionary problem, which consists of maintaining a dynamic set 
 
 \subsubsection{Membership Queries in Large-Scale Systems}
 
-A one-sided error membership oracle guarantees correctness for negative answers, a property of paramount importance in distributed systems. A definitive negative answer allows a system to avoid expensive, high-latency operations, such as disk I/O or network round-trips, which are often the primary bottlenecks to performance \cite{tarkoma2011theory, Chang2006BigtableAD}. For instance, a storage system may consult such an oracle to determine if a specific data block might exist on a remote disk before initiating a costly read operation; a negative response obviates the need for any disk access \cite{Chang2006BigtableAD, tarkoma2011theory}.
+A one-sided error membership oracle guarantees correctness for negative answers, a property of paramount importance in distributed systems. A definitive negative answer allows a system to avoid expensive, high-latency operations, such as disk I/O or network round-trips, which are often the primary bottlenecks to performance \cite{Tarkoma2012TheoryAP, Chang2006BigtableAD}. For instance, a storage system may consult such an oracle to determine if a specific data block might exist on a remote disk before initiating a costly read operation; a negative response obviates the need for any disk access \cite{Chang2006BigtableAD, Tarkoma2012TheoryAP}.
 
 \begin{definition}[One-Sided Error Membership Oracle]
     A data structure $\mathcal{D}$ representing a set $S$ is a one-sided error membership oracle with a false positive rate $\varepsilon$ if for any element $x \in S$, the probability that $\mathcal{D}.\textsc{Query}(x)$ returns true is 1, and for any element $y \notin S$, the probability that $\mathcal{D}.\textsc{Query}(y)$ returns true is at most $\varepsilon$.
 \end{definition}
 
-By definition, the oracle never produces false negatives. The adoption of such a structure is not an ad-hoc optimization but a principled architectural strategy. It represents a deliberate trade-off where a system prioritizes lower latency over strict consistency. By accepting a bounded and well-defined error probability, these algorithms enable a level of scalability and performance that would be unattainable with exact, deterministic methods \cite{tarkoma2011theory, Chang2006BigtableAD}.
+By definition, the oracle never produces false negatives. The adoption of such a structure is not an ad-hoc optimization but a principled architectural strategy. It represents a deliberate trade-off where a system prioritizes lower latency over strict consistency. By accepting a bounded and well-defined error probability, these algorithms enable a level of scalability and performance that would be unattainable with exact, deterministic methods \cite{Tarkoma2012TheoryAP, Chang2006BigtableAD}.
 
 \subsubsection{The Standard Bloom Filter}
 
-The Bloom filter is the canonical implementation of a one-sided error membership oracle \cite{tarkoma2011theory}. It achieves its space efficiency by storing compact representations of elements, derived from hash functions, rather than the elements themselves.
+The Bloom filter is the canonical implementation of a one-sided error membership oracle \cite{Tarkoma2012TheoryAP}. It achieves its space efficiency by storing compact representations of elements, derived from hash functions, rather than the elements themselves.
 
-\begin{definition}[Bloom Filter \cite{tarkoma2011theory, broder2004network}]
+\begin{definition}[Bloom Filter \cite{Tarkoma2012TheoryAP, Broder2004NetworkAO}]
     A Bloom filter for a set $S$ with expected cardinality $|S| \leq n$ from a universe $\mathcal{U}$ consists of a bit array $B$ of length $m$ initialized to all zeros, and a collection of $k$ independent hash functions $\mathcal{H} = \{h_1, \ldots, h_k\}$, where each $h_i : \mathcal{U} \to \{0, 1, \ldots, m-1\}$.
 \end{definition}
 
@@ -24,51 +24,51 @@ To insert an element $x \in S$, we set the bits at positions $B[h_i(x)]$ to 1 fo
 
 A false positive occurs for an element $y \notin S$ if all $k$ bits corresponding to its hash values have been incidentally set to 1 by the insertion of other elements. Assuming the hash functions distribute elements uniformly over the bit array, the probability of a specific bit remaining 0 after the insertion of $n$ elements is $(1 - 1/m)^{kn} \approx e^{-kn/m}$. The probability of a false positive, $\varepsilon$, is the probability that all $k$ bits for the queried element are 1.
 
-\begin{proposition}[False Positive Probability \cite{tarkoma2011theory}]
+\begin{proposition}[False Positive Probability \cite{Tarkoma2012TheoryAP}]
     The false positive probability of a Bloom filter is $\varepsilon \approx (1 - e^{-kn/m})^k$.
 \end{proposition}
 
 A given ratio $m/n$ of bits per element determines an optimal number of hash functions that minimizes this probability.
 
-\begin{theorem}[Optimal Hash Function Count \cite{broder2004network}]
+\begin{theorem}[Optimal Hash Function Count \cite{Broder2004NetworkAO}]
     For a given ratio $m/n$, the false positive rate $\varepsilon$ is minimized when the number of hash functions is $k = (m/n) \ln 2$.
 \end{theorem}
 
 This theorem yields a direct relationship between the space allocated per element and the achievable false positive rate.
 
-\begin{corollary}[Space-Error Relationship \cite{broder2004network}]
+\begin{corollary}[Space-Error Relationship \cite{Broder2004NetworkAO}]
     To achieve a target false positive rate $\varepsilon$ with an optimal number of hash functions, the required number of bits per element is $m/n = -\frac{\ln \varepsilon}{(\ln 2)^2} \approx 1.44 \log_2(1/\varepsilon)$.
 \end{corollary}
 
-The asymptotic space complexity of the Bloom filter is therefore $\Theta(n \log(1/\varepsilon))$, independent of the size of the elements. The performance relies on high-quality hash functions. In practice, computationally inexpensive non-cryptographic hash functions are sufficient, and techniques such as double hashing, which generates $k$ hash values from two initial hashes, can reduce computational overhead without asymptotically increasing the false positive probability \cite{tarkoma2011theory}.
+The asymptotic space complexity of the Bloom filter is therefore $\Theta(n \log(1/\varepsilon))$, independent of the size of the elements. The performance relies on high-quality hash functions. In practice, computationally inexpensive non-cryptographic hash functions are sufficient, and techniques such as double hashing, which generates $k$ hash values from two initial hashes, can reduce computational overhead without asymptotically increasing the false positive probability \cite{Tarkoma2012TheoryAP}.
 
 \subsection{Limitations in Dynamic Environments}
 
 The properties of the standard Bloom filter hold under the assumption that the set $S$ is static and its cardinality is known \emph{a priori}. When these assumptions are violated in dynamic environments where sets change over time, two fundamental limitations emerge that restrict the filter's applicability.
 
-First, the standard Bloom filter does not support element deletion. The \textsc{Insert} operation is irreversible; clearing a bit from 1 to 0 to remove an element $x$ would corrupt the representation of any other element $y$ that also maps to that bit position. Such an operation would introduce false negatives, thereby violating the defining property of the one-sided error membership oracle \cite{fan2014cuckoo, tarkoma2011theory}.
+First, the standard Bloom filter does not support element deletion. The \textsc{Insert} operation is irreversible; clearing a bit from 1 to 0 to remove an element $x$ would corrupt the representation of any other element $y$ that also maps to that bit position. Such an operation would introduce false negatives, thereby violating the defining property of the one-sided error membership oracle \cite{Fan2014CuckooFP, Tarkoma2012TheoryAP}.
 
-Second, the filter's capacity is fixed. Its parameters, $m$ and $k$, are optimized for an expected number of elements, $n$. Should the actual cardinality of the set significantly exceed this estimate, the bit array becomes increasingly saturated. This saturation causes the false positive rate to degrade, approaching 1 as the number of elements grows, rendering the filter ineffective \cite{almeida2007scalable, tarkoma2011theory}. These constraints necessitate architectural extensions for systems that must manage dynamic datasets of unknown or unbounded size.
+Second, the filter's capacity is fixed. Its parameters, $m$ and $k$, are optimized for an expected number of elements, $n$. Should the actual cardinality of the set significantly exceed this estimate, the bit array becomes increasingly saturated. This saturation causes the false positive rate to degrade, approaching 1 as the number of elements grows, rendering the filter ineffective \cite{Almeida2007ScalableBF, Tarkoma2012TheoryAP}. These constraints necessitate architectural extensions for systems that must manage dynamic datasets of unknown or unbounded size.
 
 \subsubsection{Counting Bloom Filter}
 
-To support element deletion, the filter's structure must be augmented to track the number of elements mapped to each position. This capability was introduced as a core component of a scalable web cache sharing protocol, where the dynamic nature of cached content required a mechanism for deletions. The solution replaces the bit array with an array of counters \cite{fan2000summarycache}.
+To support element deletion, the filter's structure must be augmented to track the number of elements mapped to each position. This capability was introduced as a core component of a scalable web cache sharing protocol, where the dynamic nature of cached content required a mechanism for deletions. The solution replaces the bit array with an array of counters \cite{Fan1998SummaryCA}.
 
-\begin{definition}[Counting Bloom Filter \cite{tarkoma2011theory}]
+\begin{definition}[Counting Bloom Filter \cite{Tarkoma2012TheoryAP}] \label{def:counting-bloom}
     A Counting Bloom Filter consists of an array $C$ of $m$ counters, each of $c$ bits, initialized to all zeros. It uses a collection of $k$ independent hash functions $\mathcal{H} = \{h_1, \ldots, h_k\}$, where each $h_i : \mathcal{U} \to \{0, \ldots, m-1\}$.
 \end{definition}
 
-The operations are redefined to act upon these counters. To insert an element, we increment the counters at the $k$ hash positions. To delete an element, we decrement the corresponding counters. A membership query returns true if and only if all corresponding counters are positive \cite{fan2000summarycache}. The primary trade-off is a space complexity increase by a factor of $c$ compared to a standard Bloom filter. The selection of counter size $c$ must be sufficient to prevent overflow; analysis has shown that 4-bit counters are sufficient for most applications \cite{fan2000summarycache, tarkoma2011theory}. The arithmetic properties of the CBF are particularly useful in distributed systems for tasks such as set reconciliation, where the difference between two sets can be computed by subtracting one filter's counter array from another \cite{guo2013set}.
+The operations are redefined to act upon these counters. To insert an element, we increment the counters at the $k$ hash positions. To delete an element, we decrement the corresponding counters. A membership query returns true if and only if all corresponding counters are positive \cite{Fan1998SummaryCA}. The primary trade-off is a space complexity increase by a factor of $c$ compared to a standard Bloom filter. The selection of counter size $c$ must be sufficient to prevent overflow; analysis has shown that 4-bit counters are sufficient for most applications \cite{Fan1998SummaryCA, Tarkoma2012TheoryAP}. The arithmetic properties of the CBF are particularly useful in distributed systems for tasks such as set reconciliation, where the difference between two sets can be computed by subtracting one filter's counter array from another \cite{Guo2013SetRV}.
 
 \subsubsection{Scalable Bloom Filter}
 
-To accommodate sets of unknown or unbounded cardinality, the Scalable Bloom Filter (SBF) architecture replaces the single, fixed-size filter with a sequence of standard Bloom filters \cite{almeida2007scalable}.
+To accommodate sets of unknown or unbounded cardinality, the Scalable Bloom Filter (SBF) architecture replaces the single, fixed-size filter with a sequence of standard Bloom filters \cite{Almeida2007ScalableBF}.
 
-\begin{definition}[Scalable Bloom Filter \cite{almeida2007scalable}]
+\begin{definition}[Scalable Bloom Filter \cite{Almeida2007ScalableBF}]
     An SBF is an ordered sequence of $s$ Bloom filters, $B_1, B_2, \ldots, B_s$. Each filter $B_i$ is defined by its size $m_i$ and number of hash functions $k_i$. The sequence is constructed such that for $i > 1$, $m_i > m_{i-1}$ and the target false positive rate $\varepsilon_i < \varepsilon_{i-1}$. This is typically achieved by scaling the size $m_i$ and tightening the error rate $\varepsilon_i$ with geometric progressions.
 \end{definition}
 
-New elements are inserted only into the last filter in the sequence, $B_s$. When this filter exceeds a predefined capacity threshold (typically when its fill ratio approaches 50\%), a new, larger filter $B_{s+1}$ with a tighter error probability is appended to the sequence. A query operation must check for the element's presence in every filter, from $B_s$ down to $B_1$. If any filter returns true, the query returns true. The overall false positive rate of the SBF is the probability that any of the constituent filters returns a false positive, and it can be bounded to a predefined maximum \cite{almeida2007scalable}.
+New elements are inserted only into the last filter in the sequence, $B_s$. When this filter exceeds a predefined capacity threshold (typically when its fill ratio approaches 50\%), a new, larger filter $B_{s+1}$ with a tighter error probability is appended to the sequence. A query operation must check for the element's presence in every filter, from $B_s$ down to $B_1$. If any filter returns true, the query returns true. The overall false positive rate of the SBF is the probability that any of the constituent filters returns a false positive, and it can be bounded to a predefined maximum \cite{Almeida2007ScalableBF}.
 
 While this architecture allows the structure to grow dynamically, its application in distributed systems is severely limited by its lack of composability. The heterogeneity of the constituent filters, each with a different size $m_i$ and number of hash functions $k_i$, prevents the use of meaningful bitwise operations, such as the OR operation for set union. This algebraic property is fundamental for efficient state aggregation and resource management in distributed environments, rendering the SBF unsuitable for such tasks \cite{Liu2014ParBFAP}.
 
@@ -78,13 +78,13 @@ The deployment of Bloom filters in a distributed system, where state is partitio
 
 \subsubsection{Temporal False Negatives}
 
-Replicating a Bloom filter across multiple nodes is a common architectural pattern to reduce query latency and network load. However, maintaining instantaneous consistency across these replicas is physically impossible. Network latency ensures that a time window of state divergence exists between an update to a primary copy and its propagation to all replicas. This temporal inconsistency leads to a class of error that does not exist in single-node implementations \cite{zhu2006false}.
+Replicating a Bloom filter across multiple nodes is a common architectural pattern to reduce query latency and network load. However, maintaining instantaneous consistency across these replicas is physically impossible. Network latency ensures that a time window of state divergence exists between an update to a primary copy and its propagation to all replicas. This temporal inconsistency leads to a class of error that does not exist in single-node implementations \cite{Zhu2006FalseRA}.
 
-\begin{definition}[Temporal False Negative \cite{zhu2006false}]
+\begin{definition}[Temporal False Negative \cite{Zhu2006FalseRA}]
     Let a global set $S$ be represented by a primary data structure $\mathcal{D}_P$ and a set of replicas $\{\mathcal{D}_{R_1}, \ldots, \mathcal{D}_{R_n}\}$. A temporal false negative occurs at time $t$ if an element $x$ has been inserted into $S$ such that a query against $\mathcal{D}_P$ would return true, but due to propagation delay, a query to a stale replica $\mathcal{D}_{R_i}$ returns false. From the perspective of the global system state, the element is a member, yet the oracle has returned a definitive negative.
 \end{definition}
 
-This phenomenon constitutes a violation of the core guarantee of the one-sided error membership oracle. It is not an intrinsic flaw of the Bloom filter but an emergent property of its deployment in an eventually consistent distributed system \cite{ramabaja2019distributed}. Its implications are severe, as many system designs are architected around the assumption that a `false` response from a Bloom filter is an authoritative answer used to prevent further, more expensive operations \cite{tarkoma2011theory, Chang2006BigtableAD}. The management of this temporal inconsistency thus becomes a primary architectural concern.
+This phenomenon constitutes a violation of the core guarantee of the one-sided error membership oracle. It is not an intrinsic flaw of the Bloom filter but an emergent property of its deployment in an eventually consistent distributed system \cite{Ramabaja2019TheDB}. Its implications are severe, as many system designs are architected around the assumption that a `false` response from a Bloom filter is an authoritative answer used to prevent further, more expensive operations \cite{Tarkoma2012TheoryAP, Chang2006BigtableAD}. The management of this temporal inconsistency thus becomes a primary architectural concern.
 
 \subsubsection{Scalability and Consistency}
 
@@ -94,7 +94,7 @@ The first architecture, the Parallel Partitioned Bloom Filter (Liu2014ParBFAP), 
 
 The second and more fundamental architecture is a protocol designed to manage set reconciliation under eventual consistency. The Distributed Bloom Filter (DBF) protocol directly confronts the temporal false negative paradox by structuring interactions to guarantee convergence over time. The protocol employs unique, pair-wise hash functions for each interaction between nodes, ensuring that hash collisions are statistically independent across successive synchronization rounds.
 
-\begin{definition}[Distributed Bloom Filter Protocol \cite{ramabaja2019distributed}]
+\begin{definition}[Distributed Bloom Filter Protocol \cite{Ramabaja2019TheDB}]
     Let two nodes, $n_i$ and $n_j$, with unique identifiers $ID_i$ and $ID_j$, wish to reconcile their local sets. The DBF protocol employs a unique, pair-wise hash function family $\mathcal{H}_{ij}$ generated from a seed $s_{ij}$, typically computed as $s_{ij} = ID_i \oplus ID_j$. A set of $k$ intermediate hashes $\{h_1^{ij}, \ldots, h_k^{ij}\}$ is derived from this seed. For each element $x \in \mathcal{U}$ with a pre-computed hash $H(x)$, the final hash values are computed as:
     \begin{equation}
         H_l^{ij}(x) = (H(x) \oplus h_l^{ij}) \pmod m \quad \forall l \in \{1, \ldots, k\}
@@ -102,16 +102,16 @@ The second and more fundamental architecture is a protocol designed to manage se
     This method allows for the computationally inexpensive generation of unique Bloom filters for each peer interaction.
 \end{definition}
 
-The protocol deliberately utilizes filters with a high individual false positive rate (e.g., 50\%) to minimize bandwidth consumption. While a single exchange is highly probabilistic, the use of unique mappings for each interaction ensures that true set differences are revealed consistently, while random errors from false positives average out over multiple interactions. This approach sacrifices single-shot accuracy for rapid long-term convergence, a trade-off well-suited for eventually consistent systems \cite{ramabaja2019distributed}. The system-wide error rate diminishes exponentially with the number of participating nodes.
+The protocol deliberately utilizes filters with a high individual false positive rate (e.g., 50\%) to minimize bandwidth consumption. While a single exchange is highly probabilistic, the use of unique mappings for each interaction ensures that true set differences are revealed consistently, while random errors from false positives average out over multiple interactions. This approach sacrifices single-shot accuracy for rapid long-term convergence, a trade-off well-suited for eventually consistent systems \cite{Ramabaja2019TheDB}. The system-wide error rate diminishes exponentially with the number of participating nodes.
 
-\begin{proposition}[DBF System-Wide Error Rate \cite{ramabaja2019distributed}]
+\begin{proposition}[DBF System-Wide Error Rate \cite{Ramabaja2019TheDB}]
     Let a system of $N$ nodes use the DBF protocol, where each individual filter has a false positive rate $\varepsilon$. For an element $y \notin \bigcup_{i=1}^N S_i$, the probability that a query for $y$ from a specific node to all of its $N-1$ peers results in a system-wide false positive is $\varepsilon_{\text{System}} \leq \varepsilon^{N-1}$.
 \end{proposition}
 \begin{proof}
     Let $\varepsilon = (1 - e^{-kn/m})^k$ be the FPR for a single filter. A system-wide false positive for a query from node $n_j$ regarding an element $y$ occurs if all $N-1$ peers it communicates with independently return a false positive. Let $E_i$ be the event of a false positive from peer $n_i$. The DBF protocol's use of unique seeds $s_{ji}$ for each peer interaction ensures that the hash function families $\mathcal{H}_{ji}$ are statistically independent for each peer $i$. Consequently, the events $E_i$ are independent. The probability of a joint failure is the product of their individual probabilities: $P(\bigcap_{i=1}^{N-1} E_i) = \prod_{i=1}^{N-1} P(E_i) = \varepsilon^{N-1}$.
 \end{proof}
 
-This result demonstrates that even with a high individual filter error rate, the probability that all peers independently produce a false positive for the same element becomes vanishingly small as the number of peers increases. The DBF protocol is thus an effective and bandwidth-efficient architecture for achieving eventual consistency in large-scale distributed systems \cite{ramabaja2019distributed}.
+This result demonstrates that even with a high individual filter error rate, the probability that all peers independently produce a false positive for the same element becomes vanishingly small as the number of peers increases. The DBF protocol is thus an effective and bandwidth-efficient architecture for achieving eventual consistency in large-scale distributed systems \cite{Ramabaja2019TheDB}.
 
 % ==============================================================================
 % FINE DELLA SEZIONE
@@ -119,18 +119,18 @@ This result demonstrates that even with a high individual filter error rate, the
 
 \subsection{Cuckoo Filters}
 
-The transition from single-node to distributed deployment exposes a structural limitation in Bloom filters that cannot be overcome through parameterization or minor refinement. In distributed systems, dataset cardinality is neither fixed nor predictable. Nodes experience churn; data undergoes compaction and replication; entries acquire expiration semantics. Elements must be deleted, not merely left to decay. A Counting Bloom Filter \ref{def:counting-bloom} addresses deletion through per-position counters, but incurs approximately four-fold space overhead compared to standard Bloom filters \cite{tarkoma2011theory}. More fundamentally, neither variant preserves the algebraic properties required for distributed state reconciliation: the ability to compute set differences and identify true absence versus deletion.
+The transition from single-node to distributed deployment exposes a structural limitation in Bloom filters that cannot be overcome through parameterization or minor refinement. In distributed systems, dataset cardinality is neither fixed nor predictable. Nodes experience churn; data undergoes compaction and replication; entries acquire expiration semantics. Elements must be deleted, not merely left to decay. A Counting Bloom Filter \ref{def:counting-bloom} addresses deletion through per-position counters, but incurs approximately four-fold space overhead compared to standard Bloom filters \cite{Tarkoma2012TheoryAP}. More fundamentally, neither variant preserves the algebraic properties required for distributed state reconciliation: the ability to compute set differences and identify true absence versus deletion.
 
-The Cuckoo Filter presents a different architectural path. It natively supports efficient deletion in $O(1)$ time without counters or additional metadata. Furtehrmore, for false positive rates below three percent, it consumes less space than optimized Bloom filters \cite{fan2014cuckoo}. Critically, these properties enable design patterns specifically suited to distributed scalability such as: elastic capacity growth without service interruption, co-location of filters with data partitions, and consistency models that distinguish true absence from deleted membership.
+The Cuckoo Filter presents a different architectural path. It natively supports efficient deletion in $O(1)$ time without counters or additional metadata. Furtehrmore, for false positive rates below three percent, it consumes less space than optimized Bloom filters \cite{Fan2014CuckooFP}. Critically, these properties enable design patterns specifically suited to distributed scalability such as: elastic capacity growth without service interruption, co-location of filters with data partitions, and consistency models that distinguish true absence from deleted membership.
 %  The value of Cuckoo Filters in distributed systems derives not from incremental performance gains but from enabling fundamentally different system architectures.
 
 \subsubsection{Partial-Key Hashing}
 
 The fundamental challenge in deploying Cuckoo Filters across network boundaries lies in the relocation operation itself. During insertion, when both candidate buckets are full, the filter must displace an existing fingerprint to its alternate location. Standard cuckoo hashing accomplishes this by recomputing the hash of the original element; the element's full key must be available to determine where to move it. In a distributed system, however, filters may be partitioned or replicated across nodes, and the original element may not be co-located with the filter metadata. Retrieving the full element for relocation decisions across network boundaries would introduce prohibitive overhead.
 
-The solution is partial-key cuckoo hashing, introduced by Fan et al., which enables relocation decisions using only the stored fingerprint \cite{fan2014cuckoo}. This capability is the prerequisite for all subsequent distributed patterns.
+The solution is partial-key cuckoo hashing, introduced by Fan et al., which enables relocation decisions using only the stored fingerprint \cite{Fan2014CuckooFP}. This capability is the prerequisite for all subsequent distributed patterns.
 
-\begin{definition}[Partial-Key Cuckoo Hashing \cite{fan2014cuckoo}]
+\begin{definition}[Partial-Key Cuckoo Hashing \cite{Fan2014CuckooFP}]
     For an element $x \in \mathcal{U}$ with precomputed fingerprint $f = \textsc{fingerprint}(x)$, the two candidate bucket indices are computed as:
     \begin{equation*}
         i_1 = \textsc{hash}(x), \quad i_2 = i_1 \oplus \textsc{hash}(f)
@@ -140,7 +140,7 @@ The solution is partial-key cuckoo hashing, introduced by Fan et al., which enab
 
 This symmetry decouples relocation from full-key access. When a fingerprint must be moved from bucket $i_1$ to its alternate location, the system computes the destination using only $f$ and the current position. The fingerprint can traverse network boundaries, be temporarily replicated on different nodes, or be moved as part of partition rebalancing, all without requiring access to the original element. For distributed systems where filters may be stored separately from data, or where data undergoes continuous replication and migration, this property is essential.
 
-\begin{definition}[Cuckoo Filter Core Operations \cite{fan2014cuckoo}]
+\begin{definition}[Cuckoo Filter Core Operations \cite{Fan2014CuckooFP}]
     A Cuckoo Filter with $m$ buckets, each containing $b$ entries, supports three operations:
 
     \emph{Lookup}$(x)$: Compute $i_1 = \textsc{hash}(x)$, $i_2 = i_1 \oplus \textsc{hash}(f)$. Return true if fingerprint $f$ exists in either bucket $i_1$ or $i_2$; otherwise return false. Query always examines at most $2b$ entries.
@@ -152,7 +152,7 @@ This symmetry decouples relocation from full-key access. When a fingerprint must
 
 We analyze the probability of a false positive, which occurs when an element not in the set hashes to a fingerprint that collides with an existing fingerprint in one of its two candidate buckets. A query inspects at most $2b$ entries across two buckets. This inspection process yields a direct upper bound on the false positive probability, which we state formally.
 
-\begin{proposition}[False Positive Probability Bound \cite{fan2014cuckoo}]
+\begin{proposition}[False Positive Probability Bound \cite{Fan2014CuckooFP}]
     Let a Cuckoo Filter be configured with $b$ entries per bucket and a fingerprint length of $f$ bits. The false positive probability $\varepsilon$ satisfies the inequality:
     \begin{equation*}
         \varepsilon \leq \frac{2b}{2^f}
@@ -165,7 +165,7 @@ From this inequality, we derive the minimum fingerprint size $f$ required to ach
 \end{equation*}
 For a configuration with $b=4$ and a target $\varepsilon=0.01$ (a 1\% false positive rate), this relationship requires a fingerprint size of at least $f \geq \lceil \log_2(100) + \log_2(8) \rceil = \lceil 6.64 + 3 \rceil = 10$ bits. This yields a compact representation that is computationally sufficient to mitigate a high rate of collisions.
 
-The architectural consequences of this design become evident when we consider the delete operation. A standard Bloom filter offers no delete mechanism; removing an element's bits risks corrupting the representation of other stored elements. A Counting Bloom Filter enables deletion but requires per-position counters, which results in a space overhead of approximately four times that of a standard Bloom filter \cite{fan2014cuckoo}. In contrast, the Cuckoo Filter implements deletion by locating the specified fingerprint in one of its two candidate buckets and removing it. This operation requires no auxiliary data structures and directly enables the dynamic distributed architectures we analyze subsequently.
+The architectural consequences of this design become evident when we consider the delete operation. A standard Bloom filter offers no delete mechanism; removing an element's bits risks corrupting the representation of other stored elements. A Counting Bloom Filter enables deletion but requires per-position counters, which results in a space overhead of approximately four times that of a standard Bloom filter \cite{Fan2014CuckooFP}. In contrast, the Cuckoo Filter implements deletion by locating the specified fingerprint in one of its two candidate buckets and removing it. This operation requires no auxiliary data structures and directly enables the dynamic distributed architectures we analyze subsequently.
 
 \subsubsection{Capacity Scaling}
 
@@ -285,7 +285,7 @@ We note that across all three concurrency models, the no-false-negatives propert
 
 When we replicate Cuckoo Filters across multiple nodes for fault tolerance, the replicas may temporarily diverge due to network latency in propagating updates. We analyze the consequences of this divergence, particularly for deletion operations, and compare the behavior of Cuckoo Filters to that of standard and Counting Bloom Filters.
 
-A standard Bloom filter provides no mechanism for deletion; elements, once inserted, remain in the filter indefinitely. A Counting Bloom Filter supports deletion by decrementing counters but at the cost of an approximately four-fold increase in space overhead \cite{fan2014cuckoo}. A Cuckoo Filter, by contrast, implements deletion as a direct removal of the element's fingerprint.
+A standard Bloom filter provides no mechanism for deletion; elements, once inserted, remain in the filter indefinitely. A Counting Bloom Filter supports deletion by decrementing counters but at the cost of an approximately four-fold increase in space overhead \cite{Fan2014CuckooFP}. A Cuckoo Filter, by contrast, implements deletion as a direct removal of the element's fingerprint.
 
 In a replicated environment, this distinction becomes architecturally significant. Consider a Cuckoo Filter replicated on nodes $n_1$ and $n_2$. An insertion of element $x$ on $n_1$ propagates asynchronously to $n_2$. During the propagation window, a query for $x$ on $n_2$ will return false. This behavior, a form of temporal false negative, is inherent to any asynchronously replicated system.
 
