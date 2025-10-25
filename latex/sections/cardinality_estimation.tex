@@ -1,184 +1,235 @@
-The cardinality estimation problem requires computing $|\text{distinct}(S)|$ for a multiset $S$ of elements from universe $\mathcal{U}$. In distributed systems, $S = \bigcup_{i=1}^N S_i$ where $S_i$ denotes the local multiset at node $i$, and we seek $|S|$ without data centralization. Exact computation necessitates $\Omega(|S| \log |\mathcal{U}|)$ bits to maintain $S$ explicitly - prohibitive for large cardinalities (e.g., counting distinct IP addresses in CDN logs with $10^9$ requests).
+% ==============================================================================
+% INIZIO DELLA SEZIONE SULLA STIMA DI CARDINALITÀ
+% ==============================================================================
 
-Probabilistic cardinality estimators accept bounded relative error in exchange for sublinear space. The HyperLogLog (HLL) algorithm~\cite{flajolet2007hyperloglog} achieves standard error $\sigma \approx 1.04/\sqrt{m}$ using $m$ registers of $\log_2 \log_2 |\mathcal{U}| + O(1)$ bits each, where $m$ controls accuracy. For $m = 2^{14}$, error is $\approx 0.81\%$ with space $\approx 12$ KB, independent of $|S|$.
+Having established the architectural necessity of probabilistic oracles for set membership queries, we now address the related but quantitatively distinct challenge of estimating the number of unique elements within a large-scale dataset. This task, formally known as the cardinality estimation problem, is a fundamental primitive in data profiling, network monitoring, and large-scale analytics \cite{harmouch2017cardinality}.
 
-\subsection{Algorithmic Foundation: Probabilistic Counting}
+\begin{definition}[The Cardinality Estimation Problem]
+    Given a multiset $S$ of elements drawn from a universe $\mathcal{U}$, the cardinality estimation problem is to determine $|S|$, defined as the number of distinct elements in $S$.
+\end{definition}
 
-HyperLogLog rests on a statistical observation regarding uniform hash functions. Let $h : \mathcal{U} \to [0, 1)$ map elements uniformly to the unit interval. Represent $h(x)$ in binary as $h(x) = 0.b_1 b_2 b_3 \ldots$ where $b_i \in \{0,1\}$. Define $\rho(x)$ as the position of the leftmost $1$-bit:
-\begin{equation}
-    \rho(x) \equiv \min\{i \geq 1 : b_i = 1\}
-\end{equation}
-Equivalently, $\rho(x)$ counts leading zeros plus one. For uniform $h$, $h(x)$ is uniformly distributed on $[0,1)$, so its binary representation has independent, identically distributed bits $b_i \sim \text{Bernoulli}(1/2)$.
+In a distributed, data-parallel framework, a naive implementation of this task necessitates a multi-stage execution. In an initial stage, each parallel worker processes a partition of the input multiset to produce a local set of unique elements. Subsequently, the framework must perform a shuffle operation, transmitting all unique elements from all partitions across the network to a common set of reducer nodes for final aggregation and deduplication \cite{zaharia2012resilient}.
 
-\begin{lemma}[Geometric Distribution of $\rho$]\label{lem:rho-geometric}
-    For uniform hash function $h$ and random element $x \in \mathcal{U}$:
-    \begin{equation}
-        \Pr[\rho(x) \geq k] = 2^{-(k-1)} \quad \text{for } k \geq 1
-    \end{equation}
-    Equivalently, $\Pr[\rho(x) = k] = 2^{-k}$ for $k \geq 1$.
-\end{lemma}
-
-\begin{proof}
-    Event $\rho(x) \geq k$ occurs iff the first $k-1$ bits of $h(x)$ are zero: $b_1 = b_2 = \cdots = b_{k-1} = 0$. Since $h$ is uniform, each bit $b_i$ is independently $0$ or $1$ with equal probability:
-    \begin{align}
-        \Pr[\rho(x) \geq k] & = \Pr[\bigwedge_{i=1}^{k-1} b_i = 0] = \prod_{i=1}^{k-1} \Pr[b_i = 0] \notag \\
-                            & = \left(\frac{1}{2}\right)^{k-1} = 2^{-(k-1)}
-    \end{align}
-    The probability mass function follows:
-    \begin{align}
-        \Pr[\rho(x) = k] & = \Pr[\rho(x) \geq k] - \Pr[\rho(x) \geq k+1] \notag \\
-                         & = 2^{-(k-1)} - 2^{-k} = 2^{-k}
-    \end{align}
-\end{proof}
-
-\begin{theorem}[Probabilistic Cardinality Bound]\label{thm:rmax-estimate}
-    Let $S$ be a multiset with $n = |\text{distinct}(S)|$ elements. Define $R \equiv \max_{x \in S} \rho(x)$. Then $2^R$ serves as a biased estimator of $n$, with expectation:
-    \begin{equation}
-        \mathbb{E}[2^R] = n \cdot \phi(n) + O(1)
-    \end{equation}
-    where $\phi(n)$ is a function that oscillates around $1$. The value $R$ concentrates around $\log_2 n$.
-\end{theorem}
-
-\begin{proof}
-    The probability that no element in $S$ achieves $\rho(x) \geq k$ is:
-    \begin{equation}
-        \Pr[R < k] = \prod_{x \in S} \Pr[\rho(x) < k] = (1 - 2^{-(k-1)})^n
-    \end{equation}
-    For $k = \log_2 n + c$ where $c$ is constant:
-    \begin{equation}
-        \Pr[R < \log_2 n + c] = \left(1 - \frac{2}{n}\right)^n \to e^{-2} \text{ as } n \to \infty
-    \end{equation}
-    This shows $R \approx \log_2 n$ with constant probability. For the expectation of $2^R$, note that:
-    \begin{equation}
-        \mathbb{E}[2^R] = \sum_{k=1}^\infty 2^k \Pr[R = k] = \sum_{k=1}^\infty 2^k \bigl(\Pr[R \geq k] - \Pr[R \geq k+1]\bigr)
-    \end{equation}
-    Using $\Pr[R \geq k] = 1 - (1 - 2^{-(k-1)})^n$ and asymptotic analysis, Flajolet et al.~\cite{flajolet2007hyperloglog} show $\mathbb{E}[2^R] = n \cdot \phi(n) + O(1)$ where $\phi(n)$ oscillates around $1$ with amplitude $O(10^{-15})$, yielding $\mathbb{E}[2^R] \approx n$ for practical purposes.
-\end{proof}
+This shuffle operation constitutes the primary architectural bottleneck. The communication cost of this approach is not fixed; it is proportional to the number of unique elements and their size. For datasets with high cardinality, the network I/O required for the shuffle dominates the total execution time, rendering the approach impractical for interactive or large-scale analytics. This communication overhead represents a fundamental physical constraint that makes exact, deterministic solutions for distributed cardinality estimation architecturally unsustainable \cite{zaharia2012resilient}.
 
 \subsection{The HyperLogLog Algorithm}
 
-Theorem~\ref{thm:rmax-estimate} suggests using $2^R$ as a cardinality estimator, but $R$ exhibits high variance. HyperLogLog reduces variance via stochastic averaging: partition the input stream into $m$ substreams using the first $b = \log_2 m$ bits of the hash, maintain independent $R$ values (registers) for each substream, and combine via harmonic mean.
+The HyperLogLog (HLL) algorithm provides a composable, fixed-size data structure, or sketch, that offers a probabilistic solution to the cardinality estimation problem. By constructing a compact summary of a dataset, it replaces the network-intensive shuffle of raw data with the transmission of the sketch itself, thereby transforming a communication-bound problem into one that is computationally manageable. Its design is predicated on the principles of stochastic averaging and the use of a harmonic mean for robust aggregation.
 
-\begin{definition}[HyperLogLog Sketch]\label{def:hll}
-    An HLL sketch with parameter $m = 2^b$ consists of:
-    \begin{enumerate}
-        \item An array $M[0 \ldots m-1]$ of registers, each initially $0$
-        \item A hash function $h : \mathcal{U} \to \{0, 1\}^L$ where $L \gg b$
-    \end{enumerate}
+\subsubsection{Stochastic Averaging and the Harmonic Mean}
+
+We sum up the core mechanics of the HyperLogLog algorithm as introduced by Flajolet et al. \cite{flajolet2007hyperloglog}. The algorithm maps elements to an array of registers and records an observable based on the bit patterns of their hash values.
+
+\begin{definition}[HyperLogLog Sketch]
+    A HyperLogLog sketch consists of an array $M$ of $m=2^p$ registers, where $p$ is a precision parameter. The sketch is associated with a hash function $h: \mathcal{U} \to \{0,1\}^L$ that maps elements from a universe $\mathcal{U}$ to binary strings of sufficient length $L$. Each register $M[j]$ is initialized to 0.
 \end{definition}
 
-The $\textsc{Add}(x)$ operation computes $w = h(x)$, splits it into prefix $w_1 = w[0:b]$ (first $b$ bits) and suffix $w_2 = w[b:L]$ (remaining bits), determines bucket index $j = \langle w_1 \rangle \in [0, m-1]$, computes $\rho_w = \text{LeadingZeros}(w_2) + 1$, and updates $M[j] \leftarrow \max(M[j], \rho_w)$.
+The algorithm processes a multiset by updating this array of registers. For each element, a single hash value is used to select a register and compute an update value. This process, known as stochastic averaging, uses one hash function to simulate $m$ independent experiments, with each register representing one experiment.
 
-The $\textsc{Count}()$ operation first computes $Z = \sum_{j=0}^{m-1} 2^{-M[j]}$ and the raw estimate $\hat{n}_{\text{raw}} = \alpha_m m^2 / Z$. It then counts zero registers $V = |\{j : M[j] = 0\}|$ and applies range corrections: if $\hat{n}_{\text{raw}} \leq 2.5m$ and $V > 0$, return $m \log(m/V)$ (small range); else if $\hat{n}_{\text{raw}} > 2^{32}/30$, return $-2^{32} \log(1 - \hat{n}_{\text{raw}}/2^{32})$ (large range); otherwise return $\hat{n}_{\text{raw}}$.
+To insert an element $v \in S$, we first compute its hash value $x = h(v)$. The first $p$ bits of $x$ are used to determine a register index $j \in \{0, \dots, m-1\}$. Let $w$ be the remaining $L-p$ bits of $x$. We then compute an observable $\rho(w)$, defined as one plus the number of leading zeros in $w$. The corresponding register is updated according to the rule $M[j] := \max(M[j], \rho(w))$. After all elements have been processed, each register $M[j]$ contains the maximum $\rho$ value observed for any element mapped to that register.
 
-The bucket index and leftmost bit position satisfy $j \equiv \langle w_1 \rangle \in [m]$ and $\rho_w \equiv \rho(0.w_2)$, while the raw estimate is:
-\begin{equation}\label{eq:hll-raw}
-    \hat{n}_{\text{raw}} = \alpha_m \cdot m^2 \cdot \left(\sum_{j=0}^{m-1} 2^{-M[j]}\right)^{-1}
-\end{equation}
+The final cardinality estimate is derived from the state of these registers. The algorithm uses the harmonic mean of the values $2^{M[j]}$, which is less sensitive to outlier values than the arithmetic or geometric mean.
 
-\begin{theorem}[HyperLogLog Accuracy]\label{thm:hll-accuracy}
-    Let $n$ denote the true cardinality. The HLL estimate $\hat{n}_{\text{raw}}$ from \eqref{eq:hll-raw} satisfies:
+\begin{proposition}[HyperLogLog Estimator \cite{flajolet2007hyperloglog}]
+    Given a HyperLogLog sketch with $m$ registers $M$, the cardinality estimate $E$ is computed as:
+    \begin{equation*}
+        E = \alpha_m m^2 \left( \sum_{j=0}^{m-1} 2^{-M[j]} \right)^{-1}
+    \end{equation*}
+    where $\alpha_m$ is a bias correction constant that depends on $m$.
+\end{proposition}
+
+This mechanism produces a fixed-size sketch of $\Theta(m \log\log n)$ bits that summarizes the cardinality of a set containing $n$ elements. The theoretical relative error of this estimate is approximately $1.04/\sqrt{m}$ \cite{flajolet2007hyperloglog}. The critical property for distributed systems is that these fixed-size sketches can be efficiently combined.
+
+\subsection{The HyperLogLog Algorithm}
+
+The HyperLogLog (HLL) algorithm provides a composable, fixed-size data structure, or sketch, that offers a probabilistic solution to the cardinality estimation problem. By constructing a compact summary of a dataset, it replaces the network-intensive shuffle of raw data with the transmission of the sketch itself, thereby transforming a communication-bound problem into one that is computationally manageable. Its design is predicated on the principles of stochastic averaging and the use of a harmonic mean for robust aggregation.
+
+\subsubsection{Stochastic Averaging and the Harmonic Mean}
+
+We formalize the core mechanics of the HyperLogLog algorithm as introduced by Flajolet et al. \cite{hyperloglog_analysis_near_optimal_cardinality_algorithm_philippe_flajolet_2007}. The algorithm maps elements to an array of registers and records an observable based on the bit patterns of their hash values.
+
+\begin{definition}[HyperLogLog Sketch]
+    A HyperLogLog sketch consists of an array $M$ of $m=2^p$ registers, where $p$ is a precision parameter. The sketch is associated with a hash function $h: \mathcal{U} \to \{0,1\}^L$ that maps elements from a universe $\mathcal{U}$ to binary strings of sufficient length $L$. Each register $M[j]$ is initialized to 0.
+\end{definition}
+
+The algorithm processes a multiset by updating this array of registers. For each element, a single hash value is used to select a register and compute an update value. This process, known as stochastic averaging, uses one hash function to simulate $m$ independent experiments, with each register representing one experiment.
+
+To insert an element $v \in S$, we first compute its hash value $x = h(v)$. The first $p$ bits of $x$ are used to determine a register index $j \in \{0, \dots, m-1\}$. Let $w$ be the remaining $L-p$ bits of $x$. We then compute an observable $\rho(w)$, defined as one plus the number of leading zeros in $w$. The corresponding register is updated according to the rule $M[j] := \max(M[j], \rho(w))$. After all elements have been processed, each register $M[j]$ contains the maximum $\rho$ value observed for any element mapped to that register.
+
+The final cardinality estimate is derived from the state of these registers. The algorithm uses the harmonic mean of the values $2^{M[j]}$, which is less sensitive to outlier values than the arithmetic or geometric mean.
+
+\begin{proposition}[HyperLogLog Estimator \cite{hyperloglog_analysis_near_optimal_cardinality_algorithm_philippe_flajolet_2007}]
+    Given a HyperLogLog sketch with $m$ registers $M$, the cardinality estimate $E$ is computed as:
     \begin{equation}
-        \mathbb{E}[\hat{n}_{\text{raw}}] = n + \epsilon_m(n)
+        E = \alpha_m m^2 \left( \sum_{j=0}^{m-1} 2^{-M[j]} \right)^{-1}
     \end{equation}
-    where $\epsilon_m(n) = O(1)$ is a small bias term. The standard error is:
-    \begin{equation}\label{eq:hll-stderr}
-        \sigma(\hat{n}_{\text{raw}}) = \frac{\beta_m}{\sqrt{m}} \cdot n
-    \end{equation}
-    where $\beta_m \to 1.04$ as $m \to \infty$.
+    where $\alpha_m$ is a bias correction constant that depends on $m$.
+\end{proposition}
+
+This mechanism produces a fixed-size sketch of $\Theta(m \log\log n)$ bits that summarizes the cardinality of a set containing $n$ elements. The theoretical relative error of this estimate is approximately $1.04/\sqrt{m}$ \cite{hyperloglog_analysis_near_optimal_cardinality_algorithm_philippe_flajolet_2007}. The critical property for distributed systems is that these fixed-size sketches can be efficiently combined.
+
+\subsubsection{Union}
+
+The utility of the HyperLogLog sketch in distributed systems is derived from its support for a computationally efficient union, or merge, operation. This operation allows sketches computed on disparate data partitions to be combined to produce a sketch representing the union of the underlying sets.
+
+\begin{definition}[HyperLogLog Union \cite{hyperloglog_practice_algorithmic_engineering_cardinality_estimation_stefan_heule_2013}]
+    Let $M_1$ and $M_2$ be two HyperLogLog sketches of $m$ registers, representing sets $S_1$ and $S_2$ respectively. The union sketch, $M_{1 \cup 2}$, representing the set $S_1 \cup S_2$, is computed as the register-wise maximum of the two input sketches:
+    \begin{equation*}
+        M_{1 \cup 2}[j] := \max(M_1[j], M_2[j]) \quad \forall j \in \{0, \ldots, m-1\}
+    \end{equation*}
+    The resulting sketch $M_{1 \cup 2}$ is identical to the sketch that would have been generated by processing all elements from both $S_1$ and $S_2$ in a single pass.
+\end{definition}
+
+The register-wise \texttt{max} operation endows the HLL union with a set of algebraic properties that are fundamental to its scalability in parallel and distributed computations.
+
+\begin{theorem}[Algebraic Properties of the Union Operation \cite{hyperloglog_practice_algorithmic_engineering_cardinality_estimation_stefan_heule_2013, redis_hyperloglog_data_structure_antirez}]
+    The HyperLogLog union operation is commutative, associative, and idempotent. For any sketches $M_A$, $M_B$, and $M_C$:
+    \begin{itemize}
+        \item Commutativity: $M_A \cup M_B = M_B \cup M_A$
+        \item Associativity: $(M_A \cup M_B) \cup M_C = M_A \cup (M_B \cup M_C)$
+        \item Idempotency: $M_A \cup M_A = M_A$
+    \end{itemize}
 \end{theorem}
 
-The constant $\alpha_m$ in \eqref{eq:hll-raw} corrects for systematic bias from the harmonic mean. The full derivation, involving Mellin transforms and depoissonization, appears in Flajolet et al.~\cite{flajolet2007hyperloglog}. For $m \ge 16$, the paper provides the approximation:
-\begin{equation}\label{eq:alpha-m}
-    \alpha_m \approx \frac{0.7213}{1 + 1.079/m}
-\end{equation}
+These properties have direct architectural implications. Commutativity and associativity guarantee that the final result of merging a collection of sketches is independent of the order of aggregation. This allows a system to perform reductions in parallel, in a hierarchical tree structure, or in any arbitrary sequence without requiring coordination or ordering constraints \cite{redis_hyperloglog_data_structure_antirez}. Idempotency ensures that re-merging a duplicate sketch does not alter the aggregate state. This property simplifies fault-tolerance protocols, as it allows for message delivery with at-least-once semantics, obviating the need for more complex exactly-once delivery mechanisms for sketch aggregation \cite{hyperloglog_practice_algorithmic_engineering_cardinality_estimation_stefan_heule_2013}.
 
-The raw estimator \eqref{eq:hll-raw} exhibits systematic bias for very small and very large cardinalities. Flajolet et al.~\cite{flajolet2007hyperloglog} introduce empirical corrections to address this. For small cardinalities ($\hat{n}_{\text{raw}} \leq 2.5m$), if $V$ registers remain zero ($M[j] = 0$), apply linear counting:
-\begin{equation}\label{eq:small-range}
-    \hat{n} = m \log(m/V)
-\end{equation}
-This exploits the occupancy information: when few elements have been inserted, many buckets remain empty, and the number of empty buckets provides a more accurate signal than the harmonic mean.
+Collectively, these properties enable the non-additive \texttt{COUNT(DISTINCT)} problem to be reframed as a decomposable aggregation problem, analogous to a \texttt{SUM}. This allows the computation to be parallelized with minimal communication overhead, a defining characteristic for scalable distributed systems \cite{resilient_distributed_datasets_fault_tolerant_in_memory_cluster_computing_matei_zaharia_2012}.
 
-For large cardinalities ($\hat{n}_{\text{raw}} > 2^{32}/30$ for 32-bit hashes), apply exponential bias correction:
-\begin{equation}\label{eq:large-range}
-    \hat{n} = -2^{32} \log\left(1 - \frac{\hat{n}_{\text{raw}}}{2^{32}}\right)
-\end{equation}
-This corrects for hash collisions when $n$ approaches the hash range $2^{32}$. These corrections bound the relative error $|\hat{n} - n|/n$ uniformly over $n \in [1, 2^{32}]$.
+\subsection{Architectural Implications}
 
-\subsection{Distributed Aggregation via Sketch Merging}
+While the algebraic properties of the HyperLogLog algorithm provide a theoretical foundation for its use in distributed systems, deployment at scale exposes practical challenges that are not apparent from the initial formulation. When applied to common analytical workloads, such as large-scale group-by aggregations, the standard HLL algorithm encounters limitations related to estimation accuracy at low cardinalities and communication overhead. These challenges motivated a series of engineered refinements, culminating in the HyperLogLog++ algorithm \cite{hyperloglog_practice_algorithmic_engineering_cardinality_estimation_stefan_heule_2013}.
 
-The architectural significance of HyperLogLog for distributed systems derives from the mergeability of sketches. Two sketches $M^{(1)}, M^{(2)}$ representing sets $S_1, S_2$ combine to yield a sketch for $S_1 \cup S_2$ via componentwise maximum:
-\begin{equation}\label{eq:hll-merge}
-    M^{(1 \cup 2)}[j] \equiv \max(M^{(1)}[j], M^{(2)}[j]) \quad \forall j \in [m]
-\end{equation}
+\subsubsection{Challenges at Scale}
 
-\begin{theorem}[Algebraic Properties of HLL Merge]\label{thm:hll-merge}
-    Define the merge operation $\oplus : \{0,1,\ldots,L\}^m \times \{0,1,\ldots,L\}^m \to \{0,1,\ldots,L\}^m$ by $(M^{(1)} \oplus M^{(2)})[j] \equiv \max(M^{(1)}[j], M^{(2)}[j])$ for all $j \in [m]$. Then:
-    \begin{enumerate}
-        \item Commutativity: $M^{(1)} \oplus M^{(2)} = M^{(2)} \oplus M^{(1)}$
-        \item Associativity: $(M^{(1)} \oplus M^{(2)}) \oplus M^{(3)} = M^{(1)} \oplus (M^{(2)} \oplus M^{(3)})$
-        \item Idempotence: $M \oplus M = M$
-    \end{enumerate}
-\end{theorem}
+We analyze two primary challenges that arise when deploying the standard HyperLogLog algorithm in a data-parallel execution environment. Both are consequences of the data distribution patterns common in large-scale analytical queries.
 
-\begin{proof}
-    All properties follow from corresponding properties of $\max : \mathbb{R} \times \mathbb{R} \to \mathbb{R}$.
+First, analytical workloads frequently involve a high degree of cardinality skew. In a distributed \texttt{GROUP BY} operation executed over billions of records, the resulting groups often follow a power-law distribution. A small number of groups may have very high cardinalities, but the vast majority of groups will contain very few unique elements \cite{hyperloglog_practice_algorithmic_engineering_cardinality_estimation_stefan_heule_2013}. The original HLL estimator exhibits significant systematic bias and a larger relative error for these low-cardinality sets, which compromises the accuracy of the estimates for the long tail of the distribution.
 
-    (1) Commutativity: For any $a, b \in \mathbb{R}$, $\max(a, b) = \max(b, a)$. Thus $M^{(1)} \oplus M^{(2)}$ and $M^{(2)} \oplus M^{(1)}$ coincide componentwise.
+Second, the aggregation of a massive number of sketches introduces a new form of communication overhead. In a distributed \texttt{GROUP BY} query, the map phase generates a separate HLL sketch for each group on each worker node. While each individual sketch is small, the total number of sketches can be in the millions or billions. The subsequent shuffle phase must serialize, transmit, and deserialize this large volume of small objects. This process can itself become a network and CPU bottleneck, undermining the efficiency gains achieved by avoiding the shuffle of raw data \cite{hyperloglog_practice_algorithmic_engineering_cardinality_estimation_stefan_heule_2013}.
+%
 
-    (2) Associativity: For any $a, b, c \in \mathbb{R}$, $\max(\max(a, b), c) = \max(a, \max(b, c))$. Thus $(M^{(1)} \oplus M^{(2)}) \oplus M^{(3)}$ and $M^{(1)} \oplus (M^{(2)} \oplus M^{(3)})$ coincide componentwise.
+\subsubsection{HyperLogLog++}
 
-    (3) Idempotence: For any $a \in \mathbb{R}$, $\max(a, a) = a$. Thus $M \oplus M$ and $M$ coincide componentwise.
-\end{proof}
+The HyperLogLog++ algorithm introduces a series of engineering refinements to the standard HLL to address the challenges of accuracy and communication overhead at scale \cite{hyperloglog_practice_algorithmic_engineering_cardinality_estimation_stefan_heule_2013}. These modifications are not merely optimizations but architectural enablers for large-scale distributed analytical systems.
 
-Consider a MapReduce-style computation where $N$ mapper nodes each maintain a local HLL sketch $M^{(i)}$ for their data partition $S_i$. To compute the global cardinality $|\bigcup_{i=1}^N S_i|$, the system executes the following workflow. In Phase 1, each mapper $i$ initializes $M^{(i)} = [0, 0, \ldots, 0]$ ($m$ registers) and processes each element $x \in S_i$ by invoking $\textsc{Add}(x)$ on $M^{(i)}$. In Phase 2, each mapper $i$ transmits $M^{(i)}$ to the reducer. In Phase 3, the reducer initializes $M^{(\text{global})} = M^{(1)}$ and for $i = 2, \ldots, N$ computes $M^{(\text{global})}[j] \leftarrow \max(M^{(\text{global})}[j], M^{(i)}[j])$ for all $j = 0, \ldots, m-1$. In Phase 4, the reducer returns $\textsc{Count}(M^{(\text{global})})$.
+First, to address the systematic bias at low cardinalities, HyperLogLog++ replaces the small-range correction with a bias correction mechanism derived from empirical data. The system uses a pre-computed table of bias values obtained from extensive simulations to correct the raw estimate, significantly improving accuracy for the low-cardinality groups prevalent in skewed analytical workloads \cite{hyperloglog_practice_algorithmic_engineering_cardinality_estimation_stefan_heule_2013}.
 
-Each mapper processes its local stream in $O(|S_i|)$ time. Mappers transmit sketches totaling $O(Nm \log L)$ bits, where $L = \log_2 \log_2 |\mathcal{U}| + O(1)$ is register bitwidth. The reducer computes $M^{(\text{global})} = \bigoplus_{i=1}^N M^{(i)}$ in $O(Nm)$ time, then invokes \textsc{Count}() in $O(m)$ time.
+Second, it mandates the use of a 64-bit hash function. This change expands the hash space to make collisions statistically insignificant even for cardinalities exceeding billions, thereby eliminating the need for the large-range correction formula of the original algorithm and simplifying the implementation \cite{hyperloglog_practice_algorithmic_engineering_cardinality_estimation_stefan_heule_2013}.
 
-\begin{theorem}[Communication Complexity of Distributed HLL]\label{thm:hll-comm}
-    Computing the cardinality of the union of $N$ sets, each of size at most $n$, requires $O(Nm \log \log |\mathcal{U}|)$ communication using HLL, compared to $O(Nn \log |\mathcal{U}|)$ for exact set union.
-\end{theorem}
+The most significant architectural refinement is the introduction of a dual-representation sketch that adapts its storage format based on cardinality. This design directly addresses the communication overhead associated with shuffling a massive number of sketches.
 
-\begin{proof}
-    Exact union requires each node to transmit its local set, costing $\sum_{i=1}^N |S_i| \log |\mathcal{U}| \leq Nn \log |\mathcal{U}|$ bits. HLL requires transmitting $N$ sketches, each of size $m \log \log |\mathcal{U}| + O(m)$ bits (since each register stores values in $[0, \log_2 |\mathcal{U}|]$, requiring $\log_2 \log_2 |\mathcal{U}| + O(1)$ bits). Total: $O(Nm \log \log |\mathcal{U}|)$ bits.
-\end{proof}
+\begin{definition}[Sparse and Dense Representations \cite{hyperloglog_practice_algorithmic_engineering_cardinality_estimation_stefan_heule_2013}]
+    A HyperLogLog++ sketch can exist in one of two formats:
+    \begin{itemize}
+        \item A \texttt{dense} format, which is the standard HLL representation: a fixed-size array of $m$ registers.
+        \item A \texttt{sparse} format, used for low cardinalities, which stores only the non-zero registers as a compressed, sorted list of (index, value) pairs.
+    \end{itemize}
+    The sketch begins in the \texttt{sparse} format and transitions to the \texttt{dense} format only when its size in the sparse representation would exceed the size of the dense format.
+\end{definition}
 
-The communication savings factor is:
-\begin{equation}\label{eq:comm-ratio}
-    \frac{Nm \log \log |\mathcal{U}|}{Nn \log |\mathcal{U}|} = \frac{m \log \log |\mathcal{U}|}{n \log |\mathcal{U}|}
-\end{equation}
-For typical parameters ($m = 2^{14}$, $|\mathcal{U}| = 2^{64}$, $n = 10^9$): this ratio is $(16384 \cdot 6)/(10^9 \cdot 64) \approx 1.5 \times 10^{-6}$, representing a six-order-of-magnitude reduction.
+The use of a sparse representation is a fundamental enabler for interactive distributed analytics. In group-by queries with high cardinality skew, the majority of generated sketches represent very few elements. The sparse format reduces the memory footprint of these numerous low-cardinality sketches by an order of magnitude or more. This reduction in size directly translates to a commensurate reduction in the volume of data that must be serialized, transmitted during the shuffle phase, and deserialized by reducer nodes. This transformation of the communication cost makes HLL++ a viable architectural component for systems that require low-latency responses to large-scale aggregation queries \cite{hyperloglog_practice_algorithmic_engineering_cardinality_estimation_stefan_heule_2013}.
 
-Theorem~\ref{thm:hll-merge} (associativity) enables hierarchical aggregation. Organize nodes into a binary tree where each internal node merges sketches from its children and propagates the result upward. This reduces latency from $O(N)$ (sequential merging at single reducer) to $O(\log N)$ (tree height) and distributes computational load across intermediate aggregators.
+\subsection{Architectures and Implementations}
 
-The algebraic properties in Theorem~\ref{thm:hll-merge} are critical for distributed systems:
-\begin{enumerate}
-    \item Commutativity enables out-of-order aggregation, allowing sketches to arrive asynchronously without affecting the result
-    \item Associativity permits arbitrary aggregation topologies (trees, DAGs), enabling load balancing and fault tolerance via redundant paths
-    \item Idempotence ensures duplicate sketch transmissions (e.g., due to retries) do not corrupt the estimate
-\end{enumerate}
-These properties align HLL perfectly with frameworks like MapReduce, Apache Spark, and stream processing systems (Flink, Storm) where data flows through acyclic aggregation graphs.
+The algebraic properties of HyperLogLog sketches, particularly their efficient and composable union operation, enable their integration into diverse distributed computing architectures. The choice of architecture is typically dictated by the nature of the data workload, whether batch or streaming, and the desired query patterns.
 
-\subsection{Space-Error Tradeoffs and Practical Considerations}
+\subsubsection{Architectural Patterns}
 
-Equation \eqref{eq:hll-stderr} establishes the space-accuracy relationship: to achieve relative error $\sigma$, HLL requires $m = \Theta(1/\sigma^2)$ registers. Each register must store a value representing the maximum number of leading zeros. With a 64-bit hash function and $b = \log_2 m$ bits used for the register index, the remaining hash suffix has $64-b$ bits. The number of leading zeros is at most $64-b$, making the maximum stored value $64-b+1$. For any practical choice of $m$ (e.g., $m \geq 16$, so $b \geq 4$), this maximum is less than 64. Therefore, 6 bits per register (allowing values $0-63$) are sufficient.
+We analyze three canonical architectural patterns for distributed HLL computation. The first is the MapReduce paradigm, fundamental for large-scale batch processing. In this model, an input dataset is partitioned across worker nodes. The map stage generates local HLL sketches for each data partition, creating a separate sketch for each grouping key in a group-by operation. The system then shuffles these compact sketches to reducer nodes. In the reduce stage, each reducer applies the union operation to merge the sketches it receives for a given key. The correctness of this stage, where sketches may arrive in an arbitrary order, is formally guaranteed by the commutativity and associativity of the union operation \cite{resilient_distributed_datasets_fault_tolerant_in_memory_cluster_computing_matei_zaharia_2012}. This pattern drastically reduces network I/O compared to an exact distributed distinct count.
 
-\begin{table}[h]
-    \centering
-    \small
-    \begin{tabular}{|c|c|c|c|}
-        \hline
-        $m$ (registers)  & Space (bytes) & $\sigma$ (\%) & Relative Error 95\% CI \\
-        \hline
-        $2^{10} = 1024$  & 768           & 3.25\%        & $\pm 6.5\%$            \\
-        $2^{12} = 4096$  & 3 KB          & 1.625\%       & $\pm 3.25\%$           \\
-        $2^{14} = 16384$ & 12 KB         & 0.81\%        & $\pm 1.62\%$           \\
-        $2^{16} = 65536$ & 48 KB         & 0.41\%        & $\pm 0.82\%$           \\
-        \hline
-    \end{tabular}
-    \caption{Space-accuracy tradeoffs for HyperLogLog. Space assumes 6-bit registers, sufficient for a $2^{64}$ universe. $\sigma$ is computed via $1.04/\sqrt{m}$. The relative error gives the approximate 95\% confidence interval $\pm 2\sigma$.}
-\end{table}
+The second pattern is designed for real-time aggregation in stream processing systems. This architecture partitions an unbounded data stream into logical windows, such as fixed time intervals or element counts. For each active window, an operator maintains a local HLL sketch. The composability of sketches allows for efficient computation over combined windows. To compute the cardinality over a time interval $T$ composed of sub-intervals $t_1, \ldots, t_k$, the system retrieves the corresponding sketches $M_{t_1}, \ldots, M_{t_k}$ and computes the final sketch as $M_T = \bigcup_{i=1}^{k} M_{t_i}$. The cost of this operation is independent of the raw data volume within the interval, enabling efficient, stateful stream processing \cite{af_stream_approximate_fault_tolerance_qun_huang_2016}.
 
-Exact count via hash table storing distinct elements requires space proportional to $n$. For $n = 10^9$ elements with 64-bit identifiers, exact storage needs $8$ GB. HLL with $m = 2^{14}$ achieves $\sigma = 0.81\%$ using only $12$ KB, a space reduction factor of approximately $6.7 \times 10^5$. This enables cardinality estimation in severely memory-constrained environments such as network switches, IoT devices, and other embedded systems.
+The third pattern is a hierarchical, or tree-based, aggregation model, well-suited for systems with a natural data hierarchy \cite{tree_based_node_aggregation_sparse_graphical_models_ines_wilms_2022}. In this model, leaf nodes generate sketches from raw data streams. Intermediate nodes in the hierarchy periodically collect and merge the sketches from their children to create higher-level aggregates. The validity of this hierarchical model rests upon the associativity of the HLL union, which ensures that the final global sketch is identical regardless of the tree's depth or the order of intermediate merge operations. This pattern enables multi-resolution querying, where queries for cardinality at different levels of the hierarchy can be answered by accessing pre-aggregated sketches without reprocessing data from lower levels.
 
-The mathematical elegance of HyperLogLog, achieving $\sigma = O(1/\sqrt{m})$ with $O(m)$ space and $O(1)$ per-element update time, establishes it as a canonical example of probabilistic streaming algorithms. The merge operation's algebraic properties (Theorem~\ref{thm:hll-merge}) align perfectly with distributed aggregation frameworks, explaining its widespread adoption in large-scale data processing systems.
+\subsubsection{Implementation Case Studies}
+
+The architectural patterns enabled by HyperLogLog are realized in a spectrum of production systems, ranging from low-level data structures requiring explicit user orchestration to high-level, transparent query optimizations managed entirely by a database engine. We analyze three representative implementations.
+
+The Redis implementation provides HLL as a primitive data type, offering maximum flexibility. It exposes three core commands: \texttt{PFADD} to insert elements, \texttt{PFCOUNT} to retrieve the cardinality estimate, and \texttt{PFMERGE} to perform the union of multiple sketches. An HLL sketch is represented as a fixed-size string. This design choice facilitates a client-driven model for distributed computation: an application can retrieve a serialized sketch from one node, transmit it over the network, and merge it with another sketch on a different node by invoking \texttt{PFMERGE}. In this model, the orchestration of the distributed aggregation is the explicit responsibility of the application logic \cite{redis_hyperloglog_data_structure_antirez}.
+
+In contrast, distributed SQL query engines such as Presto and Google BigQuery integrate HLL as a high-level, transparent optimization within the query execution layer. These systems expose the functionality through an aggregate function, typically \texttt{APPROX\_DISTINCT}. When executing a distributed query, the query planner automatically pushes the sketch creation stage to the worker nodes. The workers compute HLL++ sketches, often utilizing both sparse and dense representations to optimize for memory and network usage. In the final stage, these partial sketches are shuffled to a reducer or coordinator node, which performs a final merge aggregation. The entire process is managed by the query optimizer, abstracting the underlying mechanics from the user \cite{hyperloglog_practice_algorithmic_engineering_cardinality_estimation_stefan_heule_2013}. BigQuery further provides a multi-stage API (\texttt{HLL\_COUNT.INIT}, \texttt{HLL\_COUNT.MERGE}) that allows intermediate, partially aggregated sketches to be materialized in tables, enabling efficient incremental rollups \cite{hyperloglog_anonymity_federated_clinical_data_ziye_tao_2021}.
+
+The highest level of abstraction is represented by systems like the Citus extension for PostgreSQL. This system provides transparent distributed cardinality estimation through automatic query rewriting. An administrator can enable approximate counting via a configuration parameter. Subsequently, the distributed query planner automatically rewrites standard \texttt{COUNT(DISTINCT)} queries to use an HLL-based implementation. It pushes sketch aggregation down to the worker nodes and merges the intermediate sketches on the coordinator node to produce the final result. From the user's perspective, the use of HLL is a transparent physical-layer optimization managed entirely by the database \cite{cardinality_estimation_experimental_survey_hazar_harmouch_2017}.
+
+\subsection{Advanced Challenges in Production Environments}
+
+The deployment of probabilistic data structures in production systems introduces challenges beyond simple performance metrics. We analyze three such challenges: ensuring fault tolerance efficiently, providing security against adversarial manipulation, and managing privacy in federated contexts.
+
+\subsubsection{Fault Tolerance and Approximate Recovery}
+
+In data-parallel frameworks, fault tolerance for stateless transformations is achieved by recomputing lost partitions from their lineage graph \cite{resilient_distributed_datasets_fault_tolerant_in_memory_cluster_computing_matei_zaharia_2012}. For stateful operations, such as maintaining HLL sketches over streaming data, this approach is insufficient. Traditional fault tolerance for stateful operators requires periodic checkpointing of the entire state, which incurs significant I/O overhead and compromises performance \cite{performance_and_convergence_of_distributed_stream_processing_via_approximate_fault_tolerance_zhinan_cheng_2019}.
+
+An alternative approach, termed approximate fault tolerance, leverages the inherently probabilistic nature of the data structure to create more efficient recovery mechanisms. Instead of checkpointing at fixed intervals, this model triggers a backup only when the potential error introduced by a failure would exceed a user-defined threshold. This is managed by monitoring the divergence between the current in-memory state and its last persisted backup \cite{af_stream_approximate_fault_tolerance_qun_huang_2016}.
+
+\begin{definition}[State Divergence \cite{af_stream_approximate_fault_tolerance_qun_huang_2016}]
+    Let $M_{current}$ be the current state of an HLL sketch and $M_{backup}$ be its most recent persisted state. The state divergence, $D(M_{current}, M_{backup})$, is a metric quantifying the difference between the two sketches. The AF-Stream framework defines this divergence based on the specific properties of the streaming algorithm being used. For HLL, this can be modeled as a function of the differences between the register values.
+\end{definition}
+
+The AF-Stream protocol executes a backup operation only when the state divergence $D$ exceeds a pre-configured threshold $\Theta$, or when the number of unprocessed items since the last backup exceeds another threshold $L$. This adaptive strategy significantly reduces backup overhead during normal operation. The framework provides a formal guarantee that the total accumulated error after any number of failures remains bounded \cite{af_stream_approximate_fault_tolerance_qun_huang_2016}.
+
+\begin{proposition}[Bounded Error Under Failures \cite{af_stream_approximate_fault_tolerance_qun_huang_2016}]
+    In the AF-Stream model, let a worker experience $k$ failures. The total divergence between the actual state and the ideal, failure-free state is bounded by a function of the user-specified thresholds $\Theta$ and $L$, and algorithm-specific constants. The error bound is independent of the number of failures $k$.
+\end{proposition}
+
+This model demonstrates a principled trade-off, where a system accepts a small, provably bounded increase in estimation error in the rare event of a failure in exchange for a significant reduction in the constant overhead of checkpointing.
+
+\subsubsection{Security Against Adversarial Manipulation}
+
+The probabilistic nature of HyperLogLog, while providing efficiency, also introduces security vulnerabilities. We analyze a specific class of adversarial action, the cardinality inflation attack, where a malicious actor seeks to deliberately produce an arbitrarily large cardinality estimate from a small set of crafted inputs \cite{hyperloglog_inflating_card-
+    inality_estimates_pedro_reviriego_2020}.
+
+The attack leverages the internal structure of the HLL algorithm. An attacker can empirically discover input elements that produce high $\rho$ values for each of the $m$ registers. Even without knowledge of the specific hash function, an attacker can construct a malicious set by repeatedly generating random inputs and observing their effect on a local HLL instance. By collecting just $m$ such inputs, one targeting each register, an attacker can construct a set that populates every register with a high value. When this small set is inserted into the target HLL sketch, the harmonic mean calculation yields a massive, artificially inflated cardinality estimate. This vulnerability has been demonstrated to be effective against production implementations in systems such as Presto and Redis \cite{hyperloglog_inflating_cardinality_estimates_pedro_reviriego_2020}.
+
+We consider two classes of mitigation strategies. The first involves cryptographic techniques, such as applying a secret, system-specific salt to the hash function. This approach makes it computationally difficult for an external attacker to craft malicious inputs offline. However, this strategy breaks the mergeability property for sketches that use different salts, limiting its applicability in systems that rely on sketch union for aggregation across different administrative domains \cite{hyperloglog_inflating_cardinality_estimates_pedro_reviriego_2020}.
+
+The second class of strategies involves robust aggregation mechanisms designed to operate in the presence of Byzantine adversaries. Instead of a simple \texttt{max} operation during a merge, or a simple harmonic mean for estimation, the system can employ aggregation rules that are resilient to outliers. Techniques from the field of Byzantine-resilient distributed optimization, such as the Geometric Median or aggregation rules like Krum, are designed to filter out malicious updates \cite{byzantine_resilient_federated_multi_task_representation_learning_tuan_le_2025}. The Geometric Median, for instance, finds a point that minimizes the sum of Euclidean distances to a set of input vectors, making it inherently robust to arbitrarily corrupted inputs. Applying such robust aggregators to the vector of HLL registers during a merge operation is an active area of research for building secure, Byzantine-fault-tolerant analytical systems \cite{geometric_convergence_byzantine_resilient_distributed_optimization_kuwaranancharoen_2024}.
+
+\subsubsection{Privacy Implications in Federated Systems}
+
+While HLL sketches provide a compact summary that does not store raw data elements, their use in federated environments introduces privacy considerations. The act of sharing a sketch, even if it contains only anonymized hash-derived values, can still leak information about the underlying dataset, particularly concerning unique or rare elements \cite{hyperloglog_anonymity_federated_clinical_data_ziye_tao_2021}.
+
+In a federated query system, an adversary who compromises the central aggregator or observes the transmitted sketches could perform linkage attacks. If a hospital finds that only one patient satisfies the criteria for a query, sharing an HLL sketch of this single-element set still reveals information. An attacker could potentially infer properties of this unique patient by correlating the sketch with a known background population \cite{hyperloglog_anonymity_federated_clinical_data_ziye_tao_2021}. To quantify this risk, we can apply the concept of k-anonymity to the buckets of an HLL sketch.
+
+\begin{definition}[Bucket k-Anonymity \cite{hyperloglog_anonymity_federated_clinical_data_ziye_tao_2021}]
+    Let $B$ be the set of patients at a hospital matching a query and let $A$ be the background population of all patients at that hospital. An HLL bucket is defined to be k-anonymous if the value it contains could have been generated by at least $k$ distinct patients from the background population $A$. An attacker who observes the sketch cannot determine with certainty which of the $k$ individuals contributed to that bucket's value.
+\end{definition}
+
+The level of k-anonymity provided by an HLL sketch is a function of the sketch parameters, the size of the background population, and the size of the query set. Research has shown that it is possible to compute theoretical bounds on the expected number of buckets in a sketch that are not k-anonymous. HLL sketches are particularly effective for rare diseases (where the ratio of query set size to background population size is low). This is in marked contrast to sharing exact counts, where a count of one immediately breaks anonymity \cite{hyperloglog_anonymity_federated_clinical_data_ziye_tao_2021}. This analysis allows system designers to manage the trade-off between the accuracy of the cardinality estimate, which increases with the number of buckets $m$, and the privacy risk, as a larger $m$ may decrease the expected k-anonymity of each bucket.
+
+\subsection{Comparative Analysis and Future Directions}
+
+We conclude our analysis by situating the HyperLogLog algorithm within the broader landscape of probabilistic data structures for set summarization. This comparison highlights the specific architectural trade-offs that make HLL a suitable choice for certain classes of problems, and delineates areas of ongoing research.
+
+\subsubsection{Functional Trade-offs and Algorithmic Specialization}
+
+The architectural value of a probabilistic data structure is determined not only by its space-error characteristics but also by the set of algebraic operations it supports. The HyperLogLog algorithm is highly specialized for cardinality estimation and set union. While its merge operation is fundamental for distributed aggregation, it does not natively support other set-theoretic operations such as intersection or set difference.
+
+Alternative data structures, such as MinHash and its derivatives like Theta Sketches, provide a richer set of supported operations. These sketches are designed to estimate the Jaccard similarity between sets, from which the sizes of their union, intersection, and difference can be derived. However, this increased functionality comes at a cost. For the primary task of cardinality estimation, HLL is substantially more space-efficient than MinHash-based sketches providing the same estimation accuracy \cite{setsketch_filling_gap_minhash_hyperloglog_otmar_ertl_2021}.
+
+This distinction represents a fundamental trade-off between functional generality and architectural efficiency. HLL is architecturally optimized for the specific problem of distributed, union-based cardinality aggregation. Its design provides a near-optimal solution for this problem class. For analytical queries that require measuring the overlap between sets, a different class of data structures is necessary. The choice between these algorithms is therefore not an optimization detail but a primary architectural decision dictated by the functional requirements of the system.
+
+\subsubsection{The Frontier of Cardinality Estimation}
+
+Research in cardinality estimation continues to refine the space-error trade-off and explore new architectural possibilities. Recent algorithmic developments demonstrate that further space efficiencies are achievable while preserving the essential algebraic properties required for distributed deployment.
+
+The UltraLogLog algorithm modifies the underlying register structure to encode more information per bit \cite{ultraloglog_alternative_hyperloglog_distinct_counting_otmar_ertl_2024}. It generalizes the HyperLogLog register by partitioning its bits. A set of $q$ bits stores the maximum update value $u_i$ seen so far, while a set of $d$ additional bits acts as a compact summary, indicating whether updates with values $u_i-1, \dots, u_i-d$ have occurred. This design, particularly for the ULL configuration with $q=6$ and $d=2$, fits into a single 8-bit register. It achieves a theoretical memory-variance product approximately 28\% lower than a standard 6-bit HLL sketch while remaining commutative, idempotent, and mergeable.
+
+The HyperLogLogLog algorithm achieves compression through a sparse-dense architecture based on value offsets \cite{hyperlogloglog_cardinality_estimation_one_log_more_matti_karppa_2022}.
+
+\begin{definition}[HyperLogLogLog Sketch Structure \cite{hyperlogloglog_cardinality_estimation_one_log_more_matti_karppa_2022}]
+    A HyperLogLogLog sketch is a 3-tuple $(S, M, B)$ where:
+    \begin{itemize}
+        \item $B$ is a base value, representing a lower bound for the majority of register values.
+        \item $M$ is a dense array storing small-width integer offsets for registers whose values are close to $B$. For a register $j$ where $B \leq M'[j] < B + 2^k$, its offset $M[j] = M'[j] - B$ is stored using $k$ bits.
+        \item $S$ is a sparse associative array storing pairs $(j, M'[j])$ for outlier registers whose values fall outside the dense offset range.
+    \end{itemize}
+    The base value $B$ is chosen dynamically to minimize the total representation size $k \cdot m + |S| \cdot (\log m + \log w)$.
+\end{definition}
+
+This structure adapts to the statistical distribution of register values, using compact offsets for the common case and a sparse map for exceptions. The resulting sketch requires approximately $m \log_2\log_2\log_2 m$ bits for large $n$, albeit with a potential increase in the computational complexity of updates \cite{hyperlogloglog_cardinality_estimation_one_log_more_matti_karppa_2022}.
+
+Several open problems remain at the intersection of cardinality estimation and distributed systems. The development of robust aggregation protocols that are resilient to Byzantine adversaries is a critical area of research. Securing sketch-based systems requires moving beyond simple merge logic to robust aggregation rules that can tolerate corrupted inputs. Furthermore, integrating formal privacy guarantees with cardinality estimation sketches is necessary for enabling collaborative analytics on sensitive data. Finally, new architectural paradigms such as sketch disaggregation, where a single logical sketch is fragmented and distributed across network hardware, present a frontier for research into ultra-low-latency, in-network analytics \cite{Sketch_Disaggregation_Across_Time_and_Space}.
+
+% ==============================================================================
+% FINE DELLA SEZIONE
+% ==============================================================================

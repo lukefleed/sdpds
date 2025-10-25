@@ -1,133 +1,16 @@
-% We consider the dictionary problem, which consists of maintaining a dynamic set $S \subseteq \mathcal{U}$ and supporting the operations \textsc{Insert}$(x)$, \textsc{Delete}$(x)$, and \textsc{Query}$(x)$, where the \textsc{Query}$(x)$ operation must return whether $x \in S$. In a large-scale distributed environment, this problem's complexity is amplified by the constraints of network communication. Classical deterministic solutions, such as hash tables or search trees, become infeasible. Such structures require space proportional to the number and size of elements, which is prohibitive for massive sets. More critically, when a set is partitioned or replicated across multiple nodes to achieve scalability and fault tolerance, synchronizing these deterministic structures necessitates costly data transfers, creating communication overhead that represents the primary bottleneck to system performance \cite{mca-29-00042}.
-
-% Probabilistic data structures offer a solution by relaxing the correctness guarantee to achieve sublinear space complexity, a critical attribute for scalable systems. This approach allows a system to trade a quantifiable measure of precision for substantial gains in space and communication efficiency.
-
-% \begin{definition}[One-Sided Error Membership Oracle]
-%     A data structure $\mathcal{D}$ representing a set $S$ is a one-sided error membership oracle with a false positive rate $\varepsilon$ if for any element $x \in S$, the probability that $\mathcal{D}.\textsc{Query}(x)$ returns true is 1, and for any element $y \notin S$, the probability that $\mathcal{D}.\textsc{Query}(y)$ returns true is at most $\varepsilon$.
-% \end{definition}
-
-% By definition, the oracle never produces false negatives. This property is paramount in distributed systems, as a definitive negative answer can be used to avoid expensive and high-latency remote operations, such as disk I/O or network round-trips \cite{bloom-filters}. The adoption of such structures is not an ad-hoc optimization but a principled architectural strategy. It provides a mechanism to implement the PA/EL configuration of the PACELC theorem, where a system, during normal operation, explicitly chooses lower Latency over strong Consistency. By accepting a bounded and well-defined error probability, these algorithms enable a level of scalability and performance that would be unattainable with exact, deterministic methods.
-
-% \subsection{The Bloom Filter}
-% The Bloom filter is a space-efficient data structure that provides an implementation of a one-sided error membership oracle \cite{tarkoma2011theory}.
-
-% \begin{definition}[Bloom Filter]
-%     A Bloom filter for a set $S$ with cardinality $|S| \leq n$ from a universe $\mathcal{U}$ consists of a bit array $B$ of length $m$ initialized to all zeros, and a collection of $k$ independent hash functions $\mathcal{H} = \{h_1, \ldots, h_k\}$, where each $h_i : \mathcal{U} \to \{0, 1, \ldots, m-1\}$.
-% \end{definition}
-
-% The insertion and query operations are defined as follows. To insert an element $x \in S$, the bits at positions $B[h_i(x)]$ are set to 1 for all $i \in \{1, \ldots, k\}$. To query for an element $y$, the operation returns true if and only if $B[h_i(y)] = 1$ for all $i \in \{1, \ldots, k\}$. A query for any element $y \in S$ is guaranteed to return true, as all corresponding bits will have been set during insertion, thus satisfying the no-false-negatives condition of the oracle.
-
-% For an element $y \notin S$, a false positive occurs if all $k$ bits corresponding to its hash values have been incidentally set to 1 by the insertion of other elements. Assuming the hash functions distribute elements uniformly over the bit array, the probability of a specific bit remaining 0 after $n$ insertions is $(1 - 1/m)^{kn} \approx e^{-kn/m}$. The probability of a false positive, $\varepsilon$, is therefore approximated by the probability that all $k$ bits for the queried element are 1 \cite{tarkoma2011theory}.
-
-% \begin{proposition}[False Positive Probability]
-%     The false positive probability of a Bloom filter is $\varepsilon \approx (1 - e^{-kn/m})^k$.
-% \end{proposition}
-
-% Given a fixed ratio of bits per element, $m/n$, there exists an optimal number of hash functions, $k$, that minimizes this probability.
-
-% \begin{theorem}[Optimal Hash Function Count]
-%     For a given ratio $m/n$, the false positive rate $\varepsilon$ is minimized when the number of hash functions is $k = (m/n) \ln 2$.
-% \end{theorem}
-
-% This leads to a direct relationship between the space allocated per element and the achievable false positive rate, which defines the fundamental space-error trade-off of the structure.
-
-% \begin{corollary}[Space-Error Relationship]
-%     To achieve a target false positive rate $\varepsilon$ with an optimal number of hash functions, the required number of bits per element is given by $m/n = -\frac{\ln \varepsilon}{(\ln 2)^2} \approx 1.44 \log_2(1/\varepsilon)$.
-% \end{corollary}
-
-% This result establishes the asymptotic space complexity of the Bloom filter as $\Theta(n \log(1/\varepsilon))$, independent of the size of the elements or the universe $\mathcal{U}$. The performance and accuracy of the filter depend on the quality of its hash functions. While universal hashing provides theoretical guarantees, fast non-cryptographic hash functions with good distribution properties, such as Murmur3, are often used in practice. Techniques like double hashing, which generates $k$ hash values from two initial hashes, can further reduce computational overhead without increasing the asymptotic false positive probability \cite{tarkoma2011theory}.
-
-% Despite its efficiency, the standard Bloom filter has two fundamental limitations that restrict its use in dynamic distributed systems. First, it does not support element deletion; clearing a bit from 1 to 0 could inadvertently affect other elements that map to that bit, thereby introducing false negatives. Second, its size is fixed at creation time based on an expected number of elements, $n$. If the actual number of elements substantially exceeds this estimate, the false positive rate degrades rapidly \cite{bloom-filters, tarkoma2011theory}.
-
-% \subsubsection{Bloom Filter Variants for Dynamic Systems}
-% The static nature of the standard Bloom filter creates significant operational challenges in dynamic distributed systems where set cardinalities are unknown or fluctuate. We analyze variants that address these limitations.
-
-% \subsubsection{Counting Bloom Filter}
-% To support element deletion without introducing false negatives, the Counting Bloom Filter (CBF) modifies the underlying structure \cite{tarkoma2011theory}.
-
-% \begin{definition}[Counting Bloom Filter] \label{def:counting-bloom}
-%     A Counting Bloom Filter consists of an array $C$ of $m$ counters, each of $c$ bits, initialized to all zeros. It uses a collection of $k$ independent hash functions $\mathcal{H} = \{h_1, \ldots, h_k\}$, where each $h_i : \mathcal{U} \to \{0, \ldots, m-1\}$.
-% \end{definition}
-
-% The operations are redefined to act upon these counters. To insert an element, the counters at the $k$ hash positions are incremented. To delete an element, the corresponding counters are decremented. A membership query returns true if and only if all corresponding counters are positive. The primary trade-off is a space complexity increase by a factor of $c$ compared to a standard Bloom filter. The selection of counter size $c$ must be sufficient to avoid overflow; for most applications, a 4-bit counter is sufficient \cite{tarkoma2011theory}. The utility of the CBF in distributed systems extends to set reconciliation protocols, where the arithmetic properties of the counters allow for the computation of set differences by subtracting one filter's counter array from another \cite{bloom-filters}.
-
-% \subsubsection{Scalable Bloom Filter}
-% To accommodate sets of unknown or unbounded cardinality, the Scalable Bloom Filter (SBF) employs a sequence of standard filters \cite{tarkoma2011theory}.
-
-% \begin{definition}[Scalable Bloom Filter]
-%     An SBF is a sequence of $s$ Bloom filters, $B_1, B_2, \ldots, B_s$. Each filter $B_i$ is defined by its size $m_i$ and number of hash functions $k_i$. The sequence is constructed such that for $i > 1$, $m_i > m_{i-1}$ and the target false positive rate $\varepsilon_i < \varepsilon_{i-1}$, typically following a geometric progression.
-% \end{definition}
-
-% New elements are inserted only into the last filter in the sequence, $B_s$. If this filter exceeds a predefined capacity threshold, a new filter $B_{s+1}$ with stricter parameters is appended. A query operation must check for the element's presence in every filter from $B_s$ down to $B_1$. While this architecture allows the structure to grow dynamically, its application in distributed systems is limited by its lack of simple composability. The heterogeneity of the constituent filters prevents a meaningful bitwise union operation, complicating state aggregation tasks that rely on the algebraic properties of standard Bloom filters \cite{bloom-filters, tarkoma2011theory}.
-
-% \subsubsection{Variants for Parallelism and Network Efficiency}
-% Further variants have been developed to address the operational demands of high-concurrency and communication-constrained environments.
-
-% \subsubsection{Parallelism and Composability}
-% A Partitioned Bloom Filter modifies the internal structure by dividing the bit array into $k$ disjoint slices, with each hash function mapped to a unique slice. This can facilitate parallel operations by reducing contention \cite{bloom-filters, tarkoma2011theory}. A more advanced architecture, the Parallel Partitioned Bloom Filter (Par-BF), is designed for high-throughput dynamic systems. It uses a series of homogeneous sub-filters (sharing the same $m$ and $k$). This homogeneity preserves the ability to perform bitwise union and intersection operations, a feature lost in the SBF. The list of sub-filters is then partitioned into groups, allowing query operations to be executed in parallel across these groups, thus regaining operational flexibility for tasks like state merging and garbage collection in distributed settings \cite{bloom-filters}.
-
-% \subsubsection{Network Efficiency}
-% The Compressed Bloom Filter is designed to optimize the transmission of filter state over a network. The key idea is to use a non-optimal number of hash functions $k$ such that the resulting bit array has a lower probability of bits being set to one (less than $1/2$). This makes the bit array more amenable to standard compression algorithms, potentially resulting in a smaller transmitted size for a given target false positive rate after decompression \cite{tarkoma2011theory}.
-
-% \subsubsection{Challenges in Distributed Bloom Filter Implementations}
-% The deployment of Bloom filters in a distributed system introduces a new class of complex challenges that are absent in single-node implementations. These challenges arise from the fundamental realities of distributed computing: network latency, the possibility of network partitions, and the need to manage a shared state across independent nodes.
-
-% \subsubsection{Synchronization, Staleness, and the False Negative Paradox}
-% In many distributed architectures, it is advantageous to replicate a Bloom filter across multiple nodes to allow for fast, local lookups. However, maintaining perfect, instantaneous consistency across these replicas is physically impossible due to network latency. This inherent delay means that replicas will inevitably become "stale" \cite{bloom-filters, dds-osdi}.
-
-% The most profound consequence of replica staleness is the violation of the Bloom filter's core guarantee: the absence of false negatives. In a distributed system with replicated filters, a new type of error emerges. Consider a system where an element $x$ is added to the global set. The update is applied to the primary Bloom filter on Node A, and a message is sent to update the replica on Node B. Due to network propagation delay, there is a time window during which Node A's filter contains $x$ but Node B's replica does not. If a client queries the stale replica on Node B for element $x$ during this window, the replica will return false. However, from the perspective of the global system state, $x$ is a member of the set. The system has therefore returned a definitive "no" for an element that actually exists. This is a temporal false negative, induced by the temporal inconsistency of the distributed state \cite{bloom-filters}. This phenomenon has severe implications, as many systems are architected around the assumption that a false from a Bloom filter is an authoritative answer.
-
-% \subsubsection{Managing the Global False Positive Rate}
-% In a single-instance Bloom filter, the false positive rate (FPR) is a predictable probability. In a distributed system composed of multiple, potentially desynchronized filters, the "global" or "effective" FPR becomes a complex, emergent property. Several factors contribute to this complexity. Out-of-sync replicas degrade the system's overall accuracy. In protocols where filters are merged (e.g., via a bitwise OR), the FPR of the resulting filter depends non-trivially on the degree of overlap in the element sets. In a partitioned system, data skew can cause filters on "hot" partitions to fill up much faster than others. Their individual FPRs will degrade more quickly, and these overloaded filters will disproportionately contribute to the overall system's effective FPR. This complexity means that managing the FPR in a distributed system must transition from a static, upfront calculation into a dynamic, operational monitoring problem \cite{bloom-filters}.
-
-% \subsubsection{Architectural Patterns and Protocols for Synchronization}
-% To manage the complexities of distribution, specific architectural patterns have been developed.
-
-% \subsubsection{Models for Filter Distribution}
-% Three primary models are prevalent, each embodying a different set of trade-offs between consistency, availability, and performance.
-% A \emph{Centralized Model} uses a single, logically centralized Bloom filter (e.g., implemented in a service like Redis) as the source of truth. This simplifies consistency but introduces a potential bottleneck and single point of failure \cite{bloom-filters}.
-% A \emph{Partitioned Model} uses techniques like consistent hashing to map each element to a specific node, which maintains a filter for its local data partition. This architecture is highly scalable and partition-tolerant \cite{bloom-filters, Distributed_Dynamic_Cuckoo_Filter_System_Based_on_Redis_Cluster.pdf}.
-% A \emph{Replicated Model with Event-Driven Updates} maintains a local replica of the global filter on each node, providing the lowest possible read latency. Updates are propagated asynchronously via a messaging system (e.g., Kafka). This model prioritizes read availability but is most susceptible to the temporal false negative paradox due to propagation delays \cite{bloom-filters, dds-osdi}.
-% The selection among these models is a direct application of the trade-offs described by the CAP and PACELC theorems, aligning the filter architecture with the fundamental priorities of the application.
-
-% \subsubsection{Protocols for Efficient Set Reconciliation}
-% In eventually consistent systems, nodes must periodically synchronize their datasets. Transmitting full datasets is prohibitively expensive. Set reconciliation protocols use compact data structures to identify and transmit only the differences. Bloom filters, and particularly Counting Bloom Filters, can be used to probabilistically identify missing or extra elements between two nodes \cite{bloom-filters, 1910.07782v2}. For this specific problem, the Distributed Bloom Filter (DBF) protocol provides a highly communication-efficient solution for guaranteeing eventual consistency \cite{1910.07782v2}.
-
-% \begin{definition}[Distributed Bloom Filter Protocol]
-%     Let two nodes, $n_i$ and $n_j$, with unique identifiers $ID_i$ and $ID_j$, wish to reconcile their local sets $S_i$ and $S_j$. The DBF protocol employs a unique, pair-wise hash function family $\mathcal{H}_{ij} = \{H_1^{ij}, \ldots, H_k^{ij}\}$. This family is generated using a seed $s_{ij}$, typically computed as $s_{ij} = ID_i \oplus ID_j$. A set of $k$ intermediate hashes $\{h_1^{ij}, \ldots, h_k^{ij}\}$ is derived from $s_{ij}$. For each element $x \in \mathcal{U}$ with a pre-computed hash $H(x)$, the final hash values are computed as:
-%     \begin{equation*}
-%         H_l^{ij}(x) = (H(x) \oplus h_l^{ij}) \pmod m \quad \forall l \in \{1, \ldots, k\}
-%     \end{equation*}
-%     This computationally inexpensive method allows for the rapid generation of unique bloom filters for each peer interaction.
-% \end{definition}
-
-% The protocol deliberately uses small filters with a high individual false positive rate (e.g., 50\%) to minimize bandwidth. While a single exchange is inaccurate, the use of unique mappings for each interaction ensures that hash collisions are statistically independent across successive rounds. True set differences are revealed consistently, while random errors from false positives average out. This sacrifices single-shot accuracy for rapid long-term convergence \cite{1910.07782v2}.
-
-% \begin{proposition}[DBF System-Wide Error Rate]
-%     Let a system of $N$ nodes use the DBF protocol, where each individual filter has a false positive rate $\varepsilon$. For an element $y \notin \bigcup_{i=1}^N S_i$, the probability that a query for $y$ from a specific node to all of its $N-1$ peers results in a system-wide false positive is $\varepsilon_{\text{System}} = \varepsilon^{N-1}$.
-% \end{proposition}
-% \begin{proof}
-%     Let $\varepsilon = (1 - e^{-kn/m})^k$ be the FPR for a single filter representing a set of size $n$. A system-wide false positive for a query from node $n_j$ regarding an element $y$ occurs if all $N-1$ peers it communicates with independently return a false positive. Let $E_i$ be the event of a false positive from peer $n_i$. The DBF protocol's use of unique seeds $s_{ji}$ for each peer interaction ensures that the hash function families $\mathcal{H}_{ji}$ are statistically independent for each peer $i$. Consequently, the events $E_i$ are independent. The probability of a joint failure across all peers is the product of their individual probabilities. Therefore, $P(\bigcap_{i=1}^{N-1} E_i) = \prod_{i=1}^{N-1} P(E_i) = \varepsilon^{N-1}$.
-% \end{proof}
-% This result demonstrates that even with a high individual filter error rate $\varepsilon$, the probability that all peers independently produce a false positive for the same element becomes vanishingly small as the number of peers increases, making the DBF an effective protocol for scalable and bandwidth-efficient set reconciliation \cite{1910.07782v2}.
-
-% ==============================================================================
-% INIZIO DELLA SEZIONE SUI BLOOM FILTER
-% ==============================================================================
-
 \subsection{A Space-Efficient Oracle for Set Membership}
 
-We consider the dictionary problem, which consists of maintaining a dynamic set $S \subseteq \mathcal{U}$ and supporting membership queries. In a large-scale distributed environment, classical deterministic solutions, such as hash tables, are often infeasible due to space requirements proportional to the number of elements and, more critically, the communication overhead required for synchronization \cite{par-bf}. The architectural constraints of such systems necessitate data structures that achieve sublinear space complexity \cite{bigtable}. Probabilistic data structures fulfill this requirement by trading a quantifiable measure of precision for substantial gains in space and communication efficiency. This approach enables the design of systems that prioritize performance and availability over strict consistency. We formalize this trade-off by introducing the concept of a one-sided error membership oracle.
+We consider the dictionary problem, which consists of maintaining a dynamic set $S \subseteq \mathcal{U}$ and supporting membership queries. In a large-scale distributed environment, classical deterministic solutions, such as hash tables, are often infeasible due to space requirements proportional to the number of elements and, more critically, the communication overhead required for synchronization \cite{Liu2014ParBFAP}. The architectural constraints of such systems necessitate data structures that achieve sublinear space complexity \cite{Chang2006BigtableAD}. Probabilistic data structures fulfill this requirement by trading a quantifiable measure of precision for substantial gains in space and communication efficiency. This approach enables the design of systems that prioritize performance and availability over strict consistency. We formalize this trade-off by introducing the concept of a one-sided error membership oracle.
 
 \subsubsection{Membership Queries in Large-Scale Systems}
 
-A one-sided error membership oracle guarantees correctness for negative answers, a property of paramount importance in distributed systems. A definitive negative answer allows a system to avoid expensive, high-latency operations, such as disk I/O or network round-trips, which are often the primary bottlenecks to performance \cite{tarkoma2011theory, bigtable}. For instance, a storage system may consult such an oracle to determine if a specific data block might exist on a remote disk before initiating a costly read operation; a negative response obviates the need for any disk access \cite{bigtable, tarkoma2011theory}.
+A one-sided error membership oracle guarantees correctness for negative answers, a property of paramount importance in distributed systems. A definitive negative answer allows a system to avoid expensive, high-latency operations, such as disk I/O or network round-trips, which are often the primary bottlenecks to performance \cite{tarkoma2011theory, Chang2006BigtableAD}. For instance, a storage system may consult such an oracle to determine if a specific data block might exist on a remote disk before initiating a costly read operation; a negative response obviates the need for any disk access \cite{Chang2006BigtableAD, tarkoma2011theory}.
 
 \begin{definition}[One-Sided Error Membership Oracle]
     A data structure $\mathcal{D}$ representing a set $S$ is a one-sided error membership oracle with a false positive rate $\varepsilon$ if for any element $x \in S$, the probability that $\mathcal{D}.\textsc{Query}(x)$ returns true is 1, and for any element $y \notin S$, the probability that $\mathcal{D}.\textsc{Query}(y)$ returns true is at most $\varepsilon$.
 \end{definition}
 
-By definition, the oracle never produces false negatives. The adoption of such a structure is not an ad-hoc optimization but a principled architectural strategy. It represents a deliberate trade-off where a system prioritizes lower latency over strict consistency. By accepting a bounded and well-defined error probability, these algorithms enable a level of scalability and performance that would be unattainable with exact, deterministic methods \cite{tarkoma2011theory, bigtable}.
+By definition, the oracle never produces false negatives. The adoption of such a structure is not an ad-hoc optimization but a principled architectural strategy. It represents a deliberate trade-off where a system prioritizes lower latency over strict consistency. By accepting a bounded and well-defined error probability, these algorithms enable a level of scalability and performance that would be unattainable with exact, deterministic methods \cite{tarkoma2011theory, Chang2006BigtableAD}.
 
 \subsubsection{The Standard Bloom Filter}
 
@@ -169,13 +52,13 @@ Second, the filter's capacity is fixed. Its parameters, $m$ and $k$, are optimiz
 
 \subsubsection{Counting Bloom Filter}
 
-To support element deletion, the filter's structure must be augmented to track the number of elements mapped to each position. The Counting Bloom Filter (CBF) achieves this by replacing the bit array with an array of counters \cite{fan2000summarycache}.
+To support element deletion, the filter's structure must be augmented to track the number of elements mapped to each position. This capability was introduced as a core component of a scalable web cache sharing protocol, where the dynamic nature of cached content required a mechanism for deletions. The solution replaces the bit array with an array of counters \cite{fan2000summarycache}.
 
 \begin{definition}[Counting Bloom Filter \cite{tarkoma2011theory}]
     A Counting Bloom Filter consists of an array $C$ of $m$ counters, each of $c$ bits, initialized to all zeros. It uses a collection of $k$ independent hash functions $\mathcal{H} = \{h_1, \ldots, h_k\}$, where each $h_i : \mathcal{U} \to \{0, \ldots, m-1\}$.
 \end{definition}
 
-The operations are redefined to act upon these counters. To insert an element, we increment the counters at the $k$ hash positions. To delete an element, we decrement the corresponding counters. A membership query returns true if and only if all corresponding counters are positive. The primary trade-off is a space complexity increase by a factor of $c$ compared to a standard Bloom filter. The selection of counter size $c$ must be sufficient to prevent overflow; analysis has shown that 4-bit counters are sufficient for most applications \cite{tarkoma2011theory}. The arithmetic properties of the CBF are particularly useful in distributed systems for tasks such as set reconciliation, where the difference between two sets can be computed by subtracting one filter's counter array from another \cite{guo2013set}.
+The operations are redefined to act upon these counters. To insert an element, we increment the counters at the $k$ hash positions. To delete an element, we decrement the corresponding counters. A membership query returns true if and only if all corresponding counters are positive \cite{fan2000summarycache}. The primary trade-off is a space complexity increase by a factor of $c$ compared to a standard Bloom filter. The selection of counter size $c$ must be sufficient to prevent overflow; analysis has shown that 4-bit counters are sufficient for most applications \cite{fan2000summarycache, tarkoma2011theory}. The arithmetic properties of the CBF are particularly useful in distributed systems for tasks such as set reconciliation, where the difference between two sets can be computed by subtracting one filter's counter array from another \cite{guo2013set}.
 
 \subsubsection{Scalable Bloom Filter}
 
@@ -187,7 +70,7 @@ To accommodate sets of unknown or unbounded cardinality, the Scalable Bloom Filt
 
 New elements are inserted only into the last filter in the sequence, $B_s$. When this filter exceeds a predefined capacity threshold (typically when its fill ratio approaches 50\%), a new, larger filter $B_{s+1}$ with a tighter error probability is appended to the sequence. A query operation must check for the element's presence in every filter, from $B_s$ down to $B_1$. If any filter returns true, the query returns true. The overall false positive rate of the SBF is the probability that any of the constituent filters returns a false positive, and it can be bounded to a predefined maximum \cite{almeida2007scalable}.
 
-While this architecture allows the structure to grow dynamically, its application in distributed systems is severely limited by its lack of composability. The heterogeneity of the constituent filters, each with a different size $m_i$ and number of hash functions $k_i$, prevents the use of meaningful bitwise operations, such as the OR operation for set union. This algebraic property is fundamental for efficient state aggregation and resource management in distributed environments, rendering the SBF unsuitable for such tasks \cite{par-bf}.
+While this architecture allows the structure to grow dynamically, its application in distributed systems is severely limited by its lack of composability. The heterogeneity of the constituent filters, each with a different size $m_i$ and number of hash functions $k_i$, prevents the use of meaningful bitwise operations, such as the OR operation for set union. This algebraic property is fundamental for efficient state aggregation and resource management in distributed environments, rendering the SBF unsuitable for such tasks \cite{Liu2014ParBFAP}.
 
 \subsection{Architectural Patterns for Distributed Systems}
 
@@ -201,13 +84,13 @@ Replicating a Bloom filter across multiple nodes is a common architectural patte
     Let a global set $S$ be represented by a primary data structure $\mathcal{D}_P$ and a set of replicas $\{\mathcal{D}_{R_1}, \ldots, \mathcal{D}_{R_n}\}$. A temporal false negative occurs at time $t$ if an element $x$ has been inserted into $S$ such that a query against $\mathcal{D}_P$ would return true, but due to propagation delay, a query to a stale replica $\mathcal{D}_{R_i}$ returns false. From the perspective of the global system state, the element is a member, yet the oracle has returned a definitive negative.
 \end{definition}
 
-This phenomenon constitutes a violation of the core guarantee of the one-sided error membership oracle. It is not an intrinsic flaw of the Bloom filter but an emergent property of its deployment in an eventually consistent distributed system \cite{ramabaja2019distributed}. Its implications are severe, as many system designs are architected around the assumption that a `false` response from a Bloom filter is an authoritative answer used to prevent further, more expensive operations \cite{tarkoma2011theory, bigtable}. The management of this temporal inconsistency thus becomes a primary architectural concern.
+This phenomenon constitutes a violation of the core guarantee of the one-sided error membership oracle. It is not an intrinsic flaw of the Bloom filter but an emergent property of its deployment in an eventually consistent distributed system \cite{ramabaja2019distributed}. Its implications are severe, as many system designs are architected around the assumption that a `false` response from a Bloom filter is an authoritative answer used to prevent further, more expensive operations \cite{tarkoma2011theory, Chang2006BigtableAD}. The management of this temporal inconsistency thus becomes a primary architectural concern.
 
 \subsubsection{Scalability and Consistency}
 
 The limitations of simple Bloom filter variants in distributed environments necessitate the development of comprehensive architectural patterns. These patterns address the challenges of state aggregation, parallelism, and eventual consistency not as isolated problems, but as interconnected facets of system design. We present two such synthesized architectures.
 
-The first architecture, the Parallel Partitioned Bloom Filter (Par-BF), addresses the composability and performance limitations of the Scalable Bloom Filter. By constructing a sequence of homogeneous sub-filters, each sharing the same size $m$ and number of hash functions $k$, it preserves the algebraic properties required for distributed operations. This homogeneity allows for the bitwise union and intersection of filters, enabling efficient state aggregation. The architecture further partitions the list of sub-filters into groups, allowing query operations to be executed in parallel across these groups, thereby improving throughput in high-concurrency systems \cite{par-bf}.
+The first architecture, the Parallel Partitioned Bloom Filter (Liu2014ParBFAP), addresses the composability and performance limitations of the Scalable Bloom Filter. By constructing a sequence of homogeneous sub-filters, each sharing the same size $m$ and number of hash functions $k$, it preserves the algebraic properties required for distributed operations. This homogeneity allows for the bitwise union and intersection of filters, enabling efficient state aggregation. The architecture further partitions the list of sub-filters into groups, allowing query operations to be executed in parallel across these groups, thereby improving throughput in high-concurrency systems \cite{Liu2014ParBFAP}.
 
 The second and more fundamental architecture is a protocol designed to manage set reconciliation under eventual consistency. The Distributed Bloom Filter (DBF) protocol directly confronts the temporal false negative paradox by structuring interactions to guarantee convergence over time. The protocol employs unique, pair-wise hash functions for each interaction between nodes, ensuring that hash collisions are statistically independent across successive synchronization rounds.
 

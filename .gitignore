@@ -11,3 +11,5 @@ fact_check_*
 .clinerules
 *.bbl
 *.blg
+papers/
+library.bib
