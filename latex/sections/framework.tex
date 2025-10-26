@@ -1,0 +1,45 @@
+The preceding sections analyzed two distinct classes of problems, set membership (\S\ref{sec:membership}) and cardinality estimation (\S\ref{sec:cardinality}), and the application of distinct probabilistic data structures to their resolution. We observe that these case studies, when examined through the constraints imposed by distributed computation, reveal a fundamental dichotomy in the properties that render probabilistic oracles architecturally viable. This dichotomy centers on the properties of dynamic mutability and algebraic composability, which we identified in \S\ref{sec:introduction} as critical for modern systems. The analyses in \S\ref{sec:membership} and \S\ref{sec:cardinality} established the technical foundations for Cuckoo Filters and HyperLogLog, respectively; this section synthesizes these findings to extract the general architectural principles that govern their deployment.
+
+\subsection{Core Properties for Distributed Oracles}
+\label{subsec:core-properties}
+
+We define the two properties that form the basis of our framework. Each property addresses a distinct constraint that distributed computation imposes on probabilistic oracles.
+
+\begin{definition}[Dynamic Mutability] \label{def:mutability}
+    A probabilistic oracle $\mathcal{D}$ representing a set $S$ exhibits dynamic mutability if it supports both $\textsc{Insert}(x)$ and $\textsc{Delete}(x)$ operations for an element $x$ in $O(1)$ time complexity. Its space complexity must not exceed by more than a constant multiplicative factor that of a static probabilistic oracle with the same target false positive rate and expected capacity. The $\textsc{Delete}(x)$ operation must not introduce false negatives for any other element $y \in S, y \neq x$.
+\end{definition}
+
+The Cuckoo Filter, as described in \S\ref{sec:membership}, satisfies this definition. Its support for deletion derives from the partial-key hashing scheme (\S\ref{subsubsec:partial-key-hashing}), which enables the relocation and removal of a fingerprint using only the fingerprint itself, decoupling the operation from the original element.
+
+\begin{definition}[Algebraic Composability] \label{def:composability}
+    Let $\mathcal{D}_1, \dots, \mathcal{D}_k$ be $k$ instances of a probabilistic oracle, where each $\mathcal{D}_i$ is constructed over a data partition $S_i$. The oracle exhibits algebraic composability if there exists a binary operation $\cup$ such that the combined oracle $\mathcal{D}_{agg} = \mathcal{D}_1 \cup \dots \cup \mathcal{D}_k$ produces query results with error bounds identical to those of an oracle constructed in a single pass over the union $S = \bigcup_{i=1}^k S_i$. The operation $\cup$ must be commutative, associative, and idempotent.
+\end{definition}
+
+The HyperLogLog sketch, analyzed in \S\ref{sec:cardinality}, is the canonical example of this property. Its union operation, defined as the register-wise maximum of two sketches, satisfies these algebraic requirements as established in Theorem~\ref{thm:hll-union-properties}.
+
+\subsection{Deployment Patterns as Consequences of Properties}
+\label{subsec:patterns-from-properties}
+
+The properties established in \S\ref{subsec:core-properties} provide a lens through which we can reinterpret the system designs observed in practice. We demonstrate that distinct deployment patterns emerge as a direct consequence of a system's optimization for either dynamic mutability, as defined in Definition~\ref{def:mutability}, or algebraic composability, as defined in Definition~\ref{def:composability}.
+
+\subsubsection{Mutability and Co-Partitioning}
+\label{subsubsec:mutability-copartition}
+
+A distributed key-value store must support high-frequency insertion and deletion of elements across a dataset partitioned over multiple nodes. The property of dynamic mutability, specified in Definition~\ref{def:mutability}, directly addresses this requirement. It permits element deletion without cross-node coordination, as the operation modifies a local filter entry using only the element's fingerprint, without requiring access to the original key or consultation with other nodes.
+
+The co-partitioning pattern, documented in \S\ref{subsubsec:co-partitioning}, is the system design that fully exploits this local-delete capability. In this design, filter buckets are assigned to the same consistent hash ring as the data keys. Each node assumes responsibility for both the data items and the filter buckets that fall within its assigned token range. A membership query for an element is routed to the node responsible for the token range containing that element's hash, where the operation is processed with local memory access. As established in Theorem~\ref{thm:co-partitioned-latency}, this pattern yields an expected query latency that is independent of the total dataset size. This constant-time access guarantee is contingent upon the property of dynamic mutability. Deletion operations do not invalidate the filter's structure or require system-wide coordination, thereby preserving the stability of the element-to-node mapping.
+
+A standard Bloom filter, which lacks dynamic mutability, cannot sustain this pattern in a dynamic environment. The inability to perform deletions is a structural limitation \cite{Fan2014CuckooFP}. As discussed in \S\ref{subsec:bloom-limitations}, a Bloom filter's state diverges permanently from the true system state upon element deletion. It fails to converge to a correct negative response, continuing to return stale positives for deleted keys and forcing unnecessary validation lookups against the backing data store \cite{Mosharraf2021ImprovingLA}. The property of dynamic mutability is therefore not a performance optimization but a necessary condition for the co-partitioning pattern to provide correct membership semantics for dynamic datasets, as demonstrated in systems like Redis Cluster \cite{Luo2018DistributedDC} and within LSM-tree optimizations \cite{Dayan2021ChuckyAS}.
+
+\subsection{A Decision Framework for Structure Selection}
+\label{subsec:decision-framework}
+
+The properties defined in \S\ref{subsec:core-properties} yield a decision framework for selecting probabilistic oracles. We classify distributed system workloads based on two criteria: first, the requirement for the oracle's state to reflect explicit element deletions, and second, the requirement to aggregate information computed over partitioned data. The analysis of these criteria dictates the selection of the appropriate class of structure.
+
+A workload that requires the oracle to reflect element deletions but does not require aggregation across partitions necessitates dynamic mutability. We identify the Cuckoo Filter as the exemplar for this class of structure. This requirement appears in systems that manage tombstones in Log-Structured Merge-Trees or entries in a named-data networking Pending Interest Table, as discussed in \S\ref{subsubsec:arch-impact}.
+
+A workload that requires aggregation across partitions for a static or append-only dataset necessitates algebraic composability. The HyperLogLog sketch is the exemplar for this class of structure. Such requirements are present in large-scale cardinality estimation within MapReduce-style frameworks and in real-time analytics over windowed data, as documented in \S\ref{subsubsec:hll-patterns}.
+
+A workload that requires both properties exposes a structural gap in the documented data structures, as no single oracle provides optimal performance for both. A distributed database that must track element deletions for membership queries while aggregating cardinality estimates for query optimization exemplifies this dual requirement. We examine the consequences of this gap in \S\ref{sec:open-problems}.
+
+A workload that requires neither property, typical of static, single-node deployments, falls outside the scope of this framework. Simpler structures such as a standard Bloom filter may suffice in such contexts.

@@ -1,0 +1,9 @@
+
+
+Disaggregated systems require compact, queryable summaries of remote state to resolve the impedance mismatch between stateless compute and network-separated storage. We demonstrated that the system-level value of probabilistic data structures derives from two properties that resolve this mismatch. The first, dynamic mutability, enables state synchronization with evolving datasets through efficient element deletion. The second, algebraic composability, enables distributed aggregation without central coordination through operations that are commutative, associative, and idempotent.
+
+The case studies on Cuckoo Filters (\S\ref{sec:membership}) and HyperLogLog (\S\ref{sec:cardinality}) validated this framework. We showed that specific deployment patterns emerge as necessary consequences of these properties: co-partitioning of filter state with data for oracles optimized for mutability, and hierarchical aggregation trees for oracles optimized for composability.
+
+The framework presented in \S\ref{sec:framework} yields a decision methodology that elevates structure selection from an empirical comparison of space-error trade-offs to a principled decision guided by the system's operational requirements. Our analysis also exposed the structural gaps that this framework reveals (\S\ref{sec:open-problems}): the absence of structures that exhibit both properties optimally, the trade-offs in hybrid system designs, and the orthogonal challenges of security, privacy, and fault tolerance. These gaps define clear directions for future research.
+
+The mutability-composability dichotomy provides a principled basis for the deployment of probabilistic oracles. It explains why specific structures succeed in specific distributed contexts and offers guidance for the design of the next generation of disaggregated systems.

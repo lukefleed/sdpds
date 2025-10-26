@@ -42,7 +42,7 @@ This theorem yields a direct relationship between the space allocated per elemen
 
 The asymptotic space complexity of the Bloom filter is therefore $\Theta(n \log(1/\varepsilon))$, independent of the size of the elements. The performance relies on high-quality hash functions. In practice, computationally inexpensive non-cryptographic hash functions are sufficient, and techniques such as double hashing, which generates $k$ hash values from two initial hashes, can reduce computational overhead without asymptotically increasing the false positive probability \cite{Tarkoma2012TheoryAP}.
 
-\subsection{Limitations in Dynamic Environments}
+\subsection{Limitations in Dynamic Environments} \label{subsec:bloom-limitations}
 
 The properties of the standard Bloom filter hold under the assumption that the set $S$ is static and its cardinality is known \emph{a priori}. When these assumptions are violated in dynamic environments where sets change over time, two fundamental limitations emerge that restrict the filter's applicability.
 
@@ -50,7 +50,7 @@ First, the standard Bloom filter does not support element deletion. The \textsc{
 
 Second, the filter's capacity is fixed. Its parameters, $m$ and $k$, are optimized for an expected number of elements, $n$. Should the actual cardinality of the set significantly exceed this estimate, the bit array becomes increasingly saturated. This saturation causes the false positive rate to degrade, approaching 1 as the number of elements grows, rendering the filter ineffective \cite{Almeida2007ScalableBF, Tarkoma2012TheoryAP}. These constraints necessitate architectural extensions for systems that must manage dynamic datasets of unknown or unbounded size.
 
-\subsubsection{Counting Bloom Filter}
+\subsubsection{Counting Bloom Filter} \label{subsubsec:counting-bloom}
 
 To support element deletion, the filter's structure must be augmented to track the number of elements mapped to each position. This capability was introduced as a core component of a scalable web cache sharing protocol, where the dynamic nature of cached content required a mechanism for deletions. The solution replaces the bit array with an array of counters \cite{Fan1998SummaryCA}.
 
@@ -76,7 +76,7 @@ While this architecture allows the structure to grow dynamically, its applicatio
 
 The deployment of Bloom filters in a distributed system, where state is partitioned or replicated across nodes, introduces challenges that transcend the data structure's inherent properties. Network latency, partitioning, and the absence of a single source of truth compel an evolution from a simple data structure to a component within a larger distributed protocol. We analyze the architectural patterns developed to manage these complexities.
 
-\subsubsection{Temporal False Negatives}
+\subsubsection{Temporal False Negatives} \label{subsubsec:temporal-fn}
 
 Replicating a Bloom filter across multiple nodes is a common architectural pattern to reduce query latency and network load. However, maintaining instantaneous consistency across these replicas is physically impossible. Network latency ensures that a time window of state divergence exists between an update to a primary copy and its propagation to all replicas. This temporal inconsistency leads to a class of error that does not exist in single-node implementations \cite{Zhu2006FalseRA}.
 
@@ -117,14 +117,14 @@ This result demonstrates that even with a high individual filter error rate, the
 % FINE DELLA SEZIONE
 % ==============================================================================
 
-\subsection{Cuckoo Filters}
+\subsection{Cuckoo Filters} \label{subsec:cuckoo-filters}
 
 The transition from single-node to distributed deployment exposes a structural limitation in Bloom filters that cannot be overcome through parameterization or minor refinement. In distributed systems, dataset cardinality is neither fixed nor predictable. Nodes experience churn; data undergoes compaction and replication; entries acquire expiration semantics. Elements must be deleted, not merely left to decay. A Counting Bloom Filter \ref{def:counting-bloom} addresses deletion through per-position counters, but incurs approximately four-fold space overhead compared to standard Bloom filters \cite{Tarkoma2012TheoryAP}. More fundamentally, neither variant preserves the algebraic properties required for distributed state reconciliation: the ability to compute set differences and identify true absence versus deletion.
 
 The Cuckoo Filter presents a different architectural path. It natively supports efficient deletion in $O(1)$ time without counters or additional metadata. Furtehrmore, for false positive rates below three percent, it consumes less space than optimized Bloom filters \cite{Fan2014CuckooFP}. Critically, these properties enable design patterns specifically suited to distributed scalability such as: elastic capacity growth without service interruption, co-location of filters with data partitions, and consistency models that distinguish true absence from deleted membership.
 %  The value of Cuckoo Filters in distributed systems derives not from incremental performance gains but from enabling fundamentally different system architectures.
 
-\subsubsection{Partial-Key Hashing}
+\subsubsection{Partial-Key Hashing} \label{subsubsec:partial-key-hashing}
 
 The fundamental challenge in deploying Cuckoo Filters across network boundaries lies in the relocation operation itself. During insertion, when both candidate buckets are full, the filter must displace an existing fingerprint to its alternate location. Standard cuckoo hashing accomplishes this by recomputing the hash of the original element; the element's full key must be available to determine where to move it. In a distributed system, however, filters may be partitioned or replicated across nodes, and the original element may not be co-located with the filter metadata. Retrieving the full element for relocation decisions across network boundaries would introduce prohibitive overhead.
 
@@ -209,7 +209,7 @@ This design decouples capacity growth from query complexity, resolving the archi
 
 The I2CF architecture resolves the conflation of capacity management and element mapping found in the DCF. The DCF modifies the element-to-filter mapping to accommodate growth, leading to performance degradation. In contrast, the I2CF maintains a fixed, deterministic mapping from elements to ring positions while allowing the set of buckets to expand elastically. As a result, growth and query performance become orthogonal concerns.
 
-\subsubsection{Co-Partitioning Filters with Distributed Data}
+\subsubsection{Co-Partitioning Filters with Distributed Data} \label{subsubsec:co-partitioning}
 
 We observe that the architectural value of the Index-Independent Cuckoo Filter is most fully realized when its partitioning scheme is aligned with that of the host distributed system. Many distributed key-value stores partition their keyspace across a set of nodes using a consistent hash ring. In such systems, each node assumes responsibility for one or more token ranges on the ring.
 
@@ -223,7 +223,7 @@ This architecture has direct performance implications. A query processed on the 
 
 We can model the expected query latency for this architecture under a uniform query distribution. In a system with $m$ nodes, a randomly routed query has a probability $1/m$ of being processed locally and a probability $(1 - 1/m)$ of requiring network transit. This leads to the following formulation for the expected query latency.
 
-\begin{theorem}[Co-Partitioned Query Latency]
+\begin{theorem}[Co-Partitioned Query Latency] \label{thm:co-partitioned-latency}
     In a co-partitioned I2CF architecture of $m$ nodes under a uniform query distribution, the expected query latency $\mathbb{E}[L_q]$ is given by:
     \begin{equation*}
         \mathbb{E}[L_q] = \frac{1}{m} t_{\text{local}} + \left(1 - \frac{1}{m}\right) t_{\text{network}}
@@ -301,7 +301,7 @@ A Bloom filter behaves differently. Since it cannot remove the element, it will 
 
 This property enables Cuckoo Filters to converge more rapidly to the true state of the system, especially in environments with frequent deletions. For distributed systems implementing eventual consistency, this allows the filter's state to accurately track operations such as the purging of tombstones during compaction or garbage collection. The ability to remove fingerprints, rather than merely marking them for future cleanup, ensures that the filter remains a reliable oracle for the live, non-deleted state of the dataset.
 
-\subsubsection{Impact on Distributed System Architectures}
+\subsubsection{Impact on Distributed System Architectures} \label{subsubsec:arch-impact}
 
 We analyze the concrete architectural impact of Cuckoo Filters in several domains where distributed systems require both efficient membership testing and dynamic element deletion.
 

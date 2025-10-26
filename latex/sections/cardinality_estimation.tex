@@ -40,7 +40,7 @@ The final cardinality estimate is derived from the state of these registers. The
 
 This mechanism produces a fixed-size sketch of $\Theta(m \log\log n)$ bits that summarizes the cardinality of a set containing $n$ elements. The theoretical relative error of this estimate is approximately $1.04/\sqrt{m}$ \cite{Flajolet2007HyperLogLogTA}. The critical property for distributed systems is that these fixed-size sketches can be efficiently combined.
 
-\subsubsection{Union}
+\subsubsection{Union} \label{subsubsec:hll-union}
 
 The utility of the HyperLogLog sketch in distributed systems is derived from its support for a computationally efficient union, or merge, operation. This operation allows sketches computed on disparate data partitions to be combined to produce a sketch representing the union of the underlying sets.
 
@@ -54,7 +54,7 @@ The utility of the HyperLogLog sketch in distributed systems is derived from its
 
 The register-wise \texttt{max} operation endows the HLL union with a set of algebraic properties that are fundamental to its scalability in parallel and distributed computations.
 
-\begin{theorem}[Algebraic Properties of the Union Operation \cite{Heule2013HyperLogLogIP}]
+\begin{theorem}[Algebraic Properties of the Union Operation \cite{Heule2013HyperLogLogIP}] \label{thm:hll-union-properties}
     The HyperLogLog union operation is commutative, associative, and idempotent. For any sketches $M_A$, $M_B$, and $M_C$:
     \begin{itemize}
         \item Commutativity: $M_A \cup M_B = M_B \cup M_A$
@@ -105,7 +105,7 @@ The use of a sparse representation is a fundamental enabler for interactive dist
 
 The algebraic properties of HyperLogLog sketches, particularly their efficient and composable union operation, enable their integration into diverse distributed computing architectures. The choice of architecture is typically dictated by the nature of the data workload, whether batch or streaming, and the desired query patterns.
 
-\subsubsection{Architectural Patterns}
+\subsubsection{Architectural Patterns} \label{subsubsec:hll-patterns}
 
 We analyze three canonical architectural patterns for distributed HLL computation. The first is the MapReduce paradigm, fundamental for large-scale batch processing. In this model, an input dataset is partitioned across worker nodes. The map stage generates local HLL sketches for each data partition, creating a separate sketch for each grouping key in a group-by operation. The system then shuffles these compact sketches to reducer nodes. In the reduce stage, each reducer applies the union operation to merge the sketches it receives for a given key. The correctness of this stage, where sketches may arrive in an arbitrary order, is formally guaranteed by the commutativity and associativity of the union operation \cite{Zaharia2012ResilientDD}. This pattern drastically reduces network I/O compared to an exact distributed distinct count.
 
@@ -127,7 +127,7 @@ The highest level of abstraction is represented by systems like the Citus extens
 
 The deployment of probabilistic data structures in production systems introduces challenges beyond simple performance metrics. We analyze three such challenges: ensuring fault tolerance efficiently, providing security against adversarial manipulation, and managing privacy in federated contexts.
 
-\subsubsection{Fault Tolerance and Approximate Recovery}
+\subsubsection{Fault Tolerance and Approximate Recovery} \label{subsubsec:hll-fault-tolerance}
 
 In data-parallel frameworks, fault tolerance for stateless transformations is achieved by recomputing lost partitions from their lineage graph \cite{Zaharia2012ResilientDD}. For stateful operations, such as maintaining HLL sketches over streaming data, this approach is insufficient. Traditional fault tolerance for stateful operators requires periodic checkpointing of the entire state, which incurs significant I/O overhead and compromises performance \cite{Huang2016TowardHD}.
 
@@ -145,7 +145,7 @@ The AF-Stream protocol executes a backup operation only when the state divergenc
 
 This model demonstrates a principled trade-off, where a system accepts a small, provably bounded increase in estimation error in the rare event of a failure in exchange for a significant reduction in the constant overhead of checkpointing.
 
-\subsubsection{Security Against Adversarial Manipulation}
+\subsubsection{Security Against Adversarial Manipulation} \label{subsubsec:hll-security}
 
 The probabilistic nature of HyperLogLog, while providing efficiency, also introduces security vulnerabilities. We analyze a specific class of adversarial action, the cardinality inflation attack, where a malicious actor seeks to deliberately produce an arbitrarily large cardinality estimate from a small set of crafted inputs \cite{Reviriego2020HyperLogLogS}.
 
@@ -155,7 +155,7 @@ We consider two classes of mitigation strategies. The first involves cryptograph
 
 The second class of strategies involves robust aggregation mechanisms designed to operate in the presence of Byzantine adversaries. Instead of a simple \texttt{max} operation during a merge, or a simple harmonic mean for estimation, the system can employ aggregation rules that are resilient to outliers. Techniques from the field of Byzantine-resilient distributed optimization, such as the Geometric Median or aggregation rules like Krum, are designed to filter out malicious updates \cite{Le2025ByzantineRF}. The Geometric Median, for instance, finds a point that minimizes the sum of Euclidean distances to a set of input vectors, making it inherently robust to arbitrarily corrupted inputs. Applying such robust aggregators to the vector of HLL registers during a merge operation is an active area of research for building secure, Byzantine-fault-tolerant analytical systems \cite{Kuwaranancharoen2023OnTG}.
 
-\subsubsection{Privacy Implications in Federated Systems}
+\subsubsection{Privacy Implications in Federated Systems} \label{subsubsec:hll-privacy}
 
 While HLL sketches provide a compact summary that does not store raw data elements, their use in federated environments introduces privacy considerations. The act of sharing a sketch, even if it contains only anonymized hash-derived values, can still leak information about the underlying dataset, particularly concerning unique or rare elements \cite{Le2025ByzantineRF}.
 

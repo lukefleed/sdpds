@@ -1,0 +1,31 @@
+The framework established in \S\ref{sec:framework} classifies probabilistic oracles based on their system-level properties. We observe that this classification exposes three classes of open problems: the design of structures that exhibit both dynamic mutability and algebraic composability, the development of hybrid systems for workloads requiring both properties, and the resolution of orthogonal challenges not addressed by this dichotomy. The first two problems directly follow from the analysis in \S\ref{subsec:decision-framework}, which identified workloads that require both properties simultaneously.
+
+
+\subsection{Structures with Dual Properties}
+\label{subsec:dual-properties}
+
+Our analysis highlights a separation in the design of probabilistic oracles; the structures we examined are optimized for either dynamic mutability or algebraic composability, but not both. The Cuckoo Filter, analyzed in \S\ref{subsec:cuckoo-filters}, provides dynamic mutability but lacks a corresponding algebraic union operation. Conversely, the HyperLogLog sketch provides the algebraic composability detailed in \S\ref{subsubsec:hll-union} but offers no mechanism for element deletion. Its internal state summarizes a multiset, not a dynamic set from which elements can be removed.
+
+The Counting Bloom Filter, presented in \S\ref{subsubsec:counting-bloom}, supports deletion but fails to resolve this structural gap. It incurs a space overhead of approximately a factor of four compared to a standard Bloom filter \cite{Fan1998SummaryCA, Tarkoma2012TheoryAP}. While it supports set difference via counter subtraction, this operation fails to satisfy the conditions of algebraic composability specified in Definition~\ref{def:composability}. The operation is not idempotent; subtracting an oracle from itself produces an empty state, not the original oracle. This violates a property necessary for simple fault-tolerant aggregation.
+
+This gap motivates a central research question: can a data structure be designed that provides both constant-time deletion and an algebraic union operation that is commutative, associative, and idempotent? The decision framework in \S\ref{subsec:decision-framework} identified workloads that require both properties, such as a distributed database that must aggregate cardinality estimates for query optimization while simultaneously tracking element deletions for correct membership semantics.
+
+\subsection{Hybrid Systems for Dual Requirements}
+\label{subsec:hybrid-architectures}
+
+Workloads that require both dynamic mutability and algebraic composability admit two implementation strategies. The first strategy maintains two separate, specialized oracles: a Cuckoo Filter for membership testing that supports deletion, and a HyperLogLog sketch for cardinality estimation that supports distributed aggregation. This dual-structure design incurs additional memory overhead and operational complexity, as any operation that modifies the set must update both oracles. The advantage of this separation is that each structure remains optimized for its designated property. The Redis data store exemplifies this approach by providing distinct command sets for HyperLogLog (\texttt{PFADD}, \texttt{PFMERGE}) and Cuckoo Filters (\texttt{CF.ADD}, \texttt{CF.DEL}) \cite{redis-hll, redis-cuckoo-filters}.
+
+The second strategy involves employing a single, unified structure that provides both functions, accepting a potential reduction in efficiency for either or both properties. A unified oracle could reduce memory overhead and simplify the update protocol. As we noted in \S\ref{subsec:dual-properties}, no single structure we have examined provides both properties optimally. This exposes a research question: what are the fundamental trade-offs between space efficiency, query latency, and update complexity when designing a single structure that exhibits both dynamic mutability and algebraic composability?
+
+\subsection{Orthogonal Challenges Beyond the Dichotomy}
+\label{subsec:orthogonal-challenges}
+
+The framework we have presented provides a classification based on two primary system properties. We recognize, however, that distributed systems introduce additional challenges that are not addressed by optimizing for either dynamic mutability or algebraic composability. These challenges represent orthogonal dimensions of the design space and require system-level mechanisms beyond the core data structure. We identify three such challenges previously documented in our analysis.
+
+The first challenge is security against adversarial manipulation. As we discussed in \S\ref{subsubsec:hll-security}, neither core property provides inherent resistance to malicious inputs. Reviriego et al. demonstrate a practical cardinality inflation attack, where a small set of crafted inputs produces an arbitrarily large estimate \cite{Reviriego2020HyperLogLogS}. Mitigation requires mechanisms such as Byzantine-resilient aggregation rules designed to filter malicious updates from corrupted nodes \cite{Le2025ByzantineRF, Kuwaranancharoen2023OnTG}.
+
+The second challenge is privacy in federated systems. Algebraic composability enables distributed aggregation, but as shown in \S\ref{subsubsec:hll-privacy}, it does not inherently protect against linkage attacks. Le et al. show that without additional safeguards, an observer of transmitted sketches could infer properties of unique individuals in a dataset \cite{Le2025ByzantineRF}. Preserving privacy requires an additional layer of protocol design, such as enforcing a minimum bucket k-anonymity to quantify and bound this risk \cite{Le2025ByzantineRF}.
+
+The third challenge is fault tolerance for stateful streaming computation. While the idempotency of a composable operation simplifies certain recovery protocols, it does not provide a comprehensive solution for managing failures. Huang et al. developed the AF-Stream protocol, which uses adaptive checkpointing to provide a provable bound on error accumulation under failures, a mechanism we analyzed in \S\ref{subsubsec:hll-fault-tolerance} \cite{Huang2016TowardHD}.
+
+These challenges are not resolved by selecting a structure based on the mutability-composability dichotomy. Future research must address the interaction between these orthogonal dimensions and the core properties of the oracles themselves.
