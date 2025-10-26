@@ -46,23 +46,7 @@
 
 \begin{document}
 
-% Title and abstract in single column
-\twocolumn[
-    \maketitle
-
-    \begin{abstract}
-        Scalability in distributed systems depends fundamentally on managing the tradeoff between consistency guarantees and system performance. We analyze probabilistic data structures - Bloom filters, Distributed Bloom Filters, Cuckoo filters, and HyperLogLog - as architectural solutions to two canonical problems in large-scale systems: set membership testing and cardinality estimation. Through mathematical analysis, we establish that these structures achieve information-theoretic lower bounds on space complexity while providing quantifiable probabilistic guarantees. Bloom filters require $\Theta(n \log(1/\varepsilon))$ bits to maintain a set of $n$ elements with false positive rate $\varepsilon$, independent of universe size $|\mathcal{U}|$. HyperLogLog estimates cardinality with standard error $\sigma = 1.04/\sqrt{m}$ using $\Theta(m)$ registers, independent of true cardinality $n$. We position these structures within the PACELC consistency framework, demonstrating that they instantiate the PA/EL configuration: prioritizing Availability during partitions and Latency during normal operation, accepting probabilistic Consistency. Communication complexity analysis reveals order-of-magnitude reductions compared to exact solutions: from $\Theta(n \log |\mathcal{U}|)$ to $\Theta(n \log(1/\varepsilon))$ for set reconciliation, and from $\Theta(Nn \log |\mathcal{U}|)$ to $\Theta(Nm \log \log |\mathcal{U}|)$ for distributed cardinality aggregation. The algebraic properties of merge operations (commutativity, associativity, idempotence) enable efficient distributed aggregation without centralized coordination. We conclude that probabilistic approximation represents a principled design choice in the consistency-performance tradeoff space, essential for systems scaling to billions of operations while maintaining bounded latency.
-    \end{abstract}
-    \vspace{1em}
-]
-
-% Two-column content begins here
-% \section*{Introduction}
-% \input{sections/introduction}
-
-% \section{Background and Theoretical Foundations}
-% \label{sec:background}
-% \input{sections/background}
+\input{sections/introduction}
 
 \section{Set Membership}
 \label{sec:membership}
@@ -72,20 +56,6 @@
 \label{sec:cardinality}
 \input{sections/cardinality_estimation}
 
-% \section{Consistency Models and Architectural Analysis}
-% \label{sec:consistency}
-% \input{sections/consistency_tradeoffs}
-
-% \section{Comparative Analysis}
-% \label{sec:comparative}
-% \input{sections/comparative_analysis}
-
-% \section{Applications in Distributed Systems}
-% \label{sec:applications}
-% \input{sections/applications}
-
-% \section*{Conclusion}
-% \input{sections/conclusion}
 
 
 \clearpage

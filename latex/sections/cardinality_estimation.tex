@@ -40,34 +40,6 @@ The final cardinality estimate is derived from the state of these registers. The
 
 This mechanism produces a fixed-size sketch of $\Theta(m \log\log n)$ bits that summarizes the cardinality of a set containing $n$ elements. The theoretical relative error of this estimate is approximately $1.04/\sqrt{m}$ \cite{Flajolet2007HyperLogLogTA}. The critical property for distributed systems is that these fixed-size sketches can be efficiently combined.
 
-\subsection{The HyperLogLog Algorithm}
-
-The HyperLogLog (HLL) algorithm provides a composable, fixed-size data structure, or sketch, that offers a probabilistic solution to the cardinality estimation problem. By constructing a compact summary of a dataset, it replaces the network-intensive shuffle of raw data with the transmission of the sketch itself, thereby transforming a communication-bound problem into one that is computationally manageable. Its design is predicated on the principles of stochastic averaging and the use of a harmonic mean for robust aggregation.
-
-\subsubsection{Stochastic Averaging and the Harmonic Mean}
-
-We formalize the core mechanics of the HyperLogLog algorithm as introduced by Flajolet et al. \cite{Flajolet2007HyperLogLogTA}. The algorithm maps elements to an array of registers and records an observable based on the bit patterns of their hash values.
-
-\begin{definition}[HyperLogLog Sketch]
-    A HyperLogLog sketch consists of an array $M$ of $m=2^p$ registers, where $p$ is a precision parameter. The sketch is associated with a hash function $h: \mathcal{U} \to \{0,1\}^L$ that maps elements from a universe $\mathcal{U}$ to binary strings of sufficient length $L$. Each register $M[j]$ is initialized to 0.
-\end{definition}
-
-The algorithm processes a multiset by updating this array of registers. For each element, a single hash value is used to select a register and compute an update value. This process, known as stochastic averaging, uses one hash function to simulate $m$ independent experiments, with each register representing one experiment.
-
-To insert an element $v \in S$, we first compute its hash value $x = h(v)$. The first $p$ bits of $x$ are used to determine a register index $j \in \{0, \dots, m-1\}$. Let $w$ be the remaining $L-p$ bits of $x$. We then compute an observable $\rho(w)$, defined as one plus the number of leading zeros in $w$. The corresponding register is updated according to the rule $M[j] := \max(M[j], \rho(w))$. After all elements have been processed, each register $M[j]$ contains the maximum $\rho$ value observed for any element mapped to that register.
-
-The final cardinality estimate is derived from the state of these registers. The algorithm uses the harmonic mean of the values $2^{M[j]}$, which is less sensitive to outlier values than the arithmetic or geometric mean.
-
-\begin{proposition}[HyperLogLog Estimator \cite{Flajolet2007HyperLogLogTA}]
-    Given a HyperLogLog sketch with $m$ registers $M$, the cardinality estimate $E$ is computed as:
-    \begin{equation*}
-        E = \alpha_m m^2 \left( \sum_{j=0}^{m-1} 2^{-M[j]} \right)^{-1}
-    \end{equation*}
-    where $\alpha_m$ is a bias correction constant that depends on $m$.
-\end{proposition}
-
-This mechanism produces a fixed-size sketch of $\Theta(m \log\log n)$ bits that summarizes the cardinality of a set containing $n$ elements. The theoretical relative error of this estimate is approximately $1.04/\sqrt{m}$ \cite{Flajolet2007HyperLogLogTA}. The critical property for distributed systems is that these fixed-size sketches can be efficiently combined.
-
 \subsubsection{Union}
 
 The utility of the HyperLogLog sketch in distributed systems is derived from its support for a computationally efficient union, or merge, operation. This operation allows sketches computed on disparate data partitions to be combined to produce a sketch representing the union of the underlying sets.
@@ -97,7 +69,7 @@ Collectively, these properties enable the non-additive \texttt{COUNT(DISTINCT)} 
 
 \subsection{Architectural Implications}
 
-While the algebraic properties of the HyperLogLog algorithm provide a theoretical foundation for its use in distributed systems, deployment at scale exposes practical challenges that are not apparent from the initial formulation. When applied to common analytical workloads, such as large-scale group-by aggregations, the standard HLL algorithm encounters limitations related to estimation accuracy at low cardinalities and communication overhead. These challenges motivated a series of engineered refinements, culminating in the HyperLogLog++ algorithm \cite{Heule2013HyperLogLogIP}.
+The algebraic properties of the union operation provide a guarantee of correctness for distributed aggregation, enabling the algorithm's integration into data-parallel frameworks. These properties, however, describe the logical behavior of sketch composition, not the physical realities of executing such compositions over millions of instances in a resource-constrained environment. When applied to common analytical workloads, such as large-scale group-by aggregations, the standard HLL algorithm encounters limitations related to estimation accuracy at low cardinalities and communication overhead not apparent from its initial formulation.
 
 \subsubsection{Challenges at Scale}
 
@@ -145,13 +117,13 @@ The third pattern is a hierarchical, or tree-based, aggregation model, well-suit
 
 The architectural patterns enabled by HyperLogLog are realized in a spectrum of production systems, ranging from low-level data structures requiring explicit user orchestration to high-level, transparent query optimizations managed entirely by a database engine. We analyze three representative implementations.
 
-The Redis implementation provides HLL as a primitive data type, offering maximum flexibility. It exposes three core commands: \texttt{PFADD} to insert elements, \texttt{PFCOUNT} to retrieve the cardinality estimate, and \texttt{PFMERGE} to perform the union of multiple sketches. An HLL sketch is represented as a fixed-size string. This design choice facilitates a client-driven model for distributed computation: an application can retrieve a serialized sketch from one node, transmit it over the network, and merge it with another sketch on a different node by invoking \texttt{PFMERGE}. In this model, the orchestration of the distributed aggregation is the explicit responsibility of the application logic.
+The Redis implementation \cite{redis-hll} provides HLL as a primitive data type, offering maximum flexibility. It exposes three core commands: \texttt{PFADD} to insert elements, \texttt{PFCOUNT} to retrieve the cardinality estimate, and \texttt{PFMERGE} to perform the union of multiple sketches. An HLL sketch is represented as a fixed-size string. This design choice facilitates a client-driven model for distributed computation: an application can retrieve a serialized sketch from one node, transmit it over the network, and merge it with another sketch on a different node by invoking \texttt{PFMERGE}. In this model, the orchestration of the distributed aggregation is the explicit responsibility of the application logic.
 
 In contrast, distributed SQL query engines such as Presto and Google BigQuery integrate HLL as a high-level, transparent optimization within the query execution layer. These systems expose the functionality through an aggregate function, typically \texttt{APPROX\_DISTINCT}. When executing a distributed query, the query planner automatically pushes the sketch creation stage to the worker nodes. The workers compute HLL++ sketches, often utilizing both sparse and dense representations to optimize for memory and network usage. In the final stage, these partial sketches are shuffled to a reducer or coordinator node, which performs a final merge aggregation. The entire process is managed by the query optimizer, abstracting the underlying mechanics from the user \cite{Heule2013HyperLogLogIP}. BigQuery further provides a multi-stage API (\texttt{HLL\_COUNT.INIT}, \texttt{HLL\_COUNT.MERGE}) that allows intermediate, partially aggregated sketches to be materialized in tables, enabling efficient incremental rollups \cite{Tao2021Expected1O}.
 
 The highest level of abstraction is represented by systems like the Citus extension for PostgreSQL. This system provides transparent distributed cardinality estimation through automatic query rewriting. An administrator can enable approximate counting via a configuration parameter. Subsequently, the distributed query planner automatically rewrites standard \texttt{COUNT(DISTINCT)} queries to use an HLL-based implementation. It pushes sketch aggregation down to the worker nodes and merges the intermediate sketches on the coordinator node to produce the final result. From the user's perspective, the use of HLL is a transparent physical-layer optimization managed entirely by the database \cite{Harmouch2017CardinalityEA}.
 
-\subsection{Advanced Challenges in Production Environments}
+\subsection{Challenges in Production Environments}
 
 The deployment of probabilistic data structures in production systems introduces challenges beyond simple performance metrics. We analyze three such challenges: ensuring fault tolerance efficiently, providing security against adversarial manipulation, and managing privacy in federated contexts.
 
@@ -195,11 +167,8 @@ In a federated query system, an adversary who compromises the central aggregator
 
 The level of k-anonymity provided by an HLL sketch is a function of the sketch parameters, the size of the background population, and the size of the query set. Research has shown that it is possible to compute theoretical bounds on the expected number of buckets in a sketch that are not k-anonymous. HLL sketches are particularly effective for rare diseases (where the ratio of query set size to background population size is low). This is in marked contrast to sharing exact counts, where a count of one immediately breaks anonymity \cite{Le2025ByzantineRF}. This analysis allows system designers to manage the trade-off between the accuracy of the cardinality estimate, which increases with the number of buckets $m$, and the privacy risk, as a larger $m$ may decrease the expected k-anonymity of each bucket.
 
-\subsection{Comparative Analysis and Future Directions}
+\subsection{Limitations and Variants}
 
-We conclude our analysis by situating the HyperLogLog algorithm within the broader landscape of probabilistic data structures for set summarization. This comparison highlights the specific architectural trade-offs that make HLL a suitable choice for certain classes of problems, and delineates areas of ongoing research.
-
-\subsubsection{Functional Trade-offs and Algorithmic Specialization}
 
 The architectural value of a probabilistic data structure is determined not only by its space-error characteristics but also by the set of algebraic operations it supports. The HyperLogLog algorithm is highly specialized for cardinality estimation and set union. While its merge operation is fundamental for distributed aggregation, it does not natively support other set-theoretic operations such as intersection or set difference.
 
@@ -207,7 +176,7 @@ Alternative data structures, such as MinHash and its derivatives like Theta Sket
 
 This distinction represents a fundamental trade-off between functional generality and architectural efficiency. HLL is architecturally optimized for the specific problem of distributed, union-based cardinality aggregation. Its design provides a near-optimal solution for this problem class. For analytical queries that require measuring the overlap between sets, a different class of data structures is necessary. The choice between these algorithms is therefore not an optimization detail but a primary architectural decision dictated by the functional requirements of the system.
 
-\subsubsection{The Frontier of Cardinality Estimation}
+\subsubsection{Variants for Cardinality Estimation}
 
 Research in cardinality estimation continues to refine the space-error trade-off and explore new architectural possibilities. Recent algorithmic developments demonstrate that further space efficiencies are achievable while preserving the essential algebraic properties required for distributed deployment.
 

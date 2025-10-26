@@ -1,6 +1,6 @@
-\subsection{A Space-Efficient Oracle for Set Membership}
+\subsection{A Space-Efficient Oracle}
 
-We consider the dictionary problem, which consists of maintaining a dynamic set $S \subseteq \mathcal{U}$ and supporting membership queries. In a large-scale distributed environment, classical deterministic solutions, such as hash tables, are often infeasible due to space requirements proportional to the number of elements and, more critically, the communication overhead required for synchronization \cite{Liu2014ParBFAP}. The architectural constraints of such systems necessitate data structures that achieve sublinear space complexity \cite{Chang2006BigtableAD}. Probabilistic data structures fulfill this requirement by trading a quantifiable measure of precision for substantial gains in space and communication efficiency. This approach enables the design of systems that prioritize performance and availability over strict consistency. We formalize this trade-off by introducing the concept of a one-sided error membership oracle.
+We consider the dictionary problem, which consists of maintaining a dynamic set $S \subseteq \mathcal{U}$ and supporting membership queries. This capability is a fundamental primitive for a class of distributed protocols concerned with set reconciliation, the process of computing the symmetric difference between sets held on disparate nodes. In a large-scale distributed environment, classical deterministic solutions to the membership problem, such as hash tables, are often infeasible due to space requirements proportional to the number of elements and the communication overhead required for synchronization \cite{Liu2014ParBFAP}. The architectural constraints of such systems necessitate data structures that achieve sublinear space complexity \cite{Chang2006BigtableAD}. Probabilistic data structures fulfill this requirement by trading a quantifiable measure of precision for substantial gains in space and communication efficiency. This approach enables the design of systems that prioritize performance and availability over strict consistency.
 
 \subsubsection{Membership Queries in Large-Scale Systems}
 
@@ -72,7 +72,7 @@ New elements are inserted only into the last filter in the sequence, $B_s$. When
 
 While this architecture allows the structure to grow dynamically, its application in distributed systems is severely limited by its lack of composability. The heterogeneity of the constituent filters, each with a different size $m_i$ and number of hash functions $k_i$, prevents the use of meaningful bitwise operations, such as the OR operation for set union. This algebraic property is fundamental for efficient state aggregation and resource management in distributed environments, rendering the SBF unsuitable for such tasks \cite{Liu2014ParBFAP}.
 
-\subsection{Architectural Patterns for Distributed Systems}
+\subsection{Distributed Patterns}
 
 The deployment of Bloom filters in a distributed system, where state is partitioned or replicated across nodes, introduces challenges that transcend the data structure's inherent properties. Network latency, partitioning, and the absence of a single source of truth compel an evolution from a simple data structure to a component within a larger distributed protocol. We analyze the architectural patterns developed to manage these complexities.
 
@@ -187,6 +187,8 @@ This architectural pattern creates a direct conflict between capacity scaling an
 
 The linear query complexity arises because the DCF organizes its constituent filters temporally, by insertion order, rather than deterministically by element hash value. No direct mapping exists between an element's content and the specific filter that contains it. Membership testing therefore degenerates to a sequential search, an operation incompatible with the constant-time query requirements of scalable distributed systems.
 
+A scalable architecture requires that the mapping from an element to its storage location be a deterministic function of the element's hash value, independent of the system's growth over time or the insertion order of other elements. This decouples the problem of element location from the problem of capacity management, ensuring that query performance remains constant as the system scales.
+
 \subsubsection{Consistent Hashing}
 
 The linear degradation in query performance of the Dynamic Cuckoo Filter arises from its temporal organization. We observe that distributed systems have already addressed analogous scaling challenges for data partitioning. Architectures such as Apache Cassandra and Amazon DynamoDB employ consistent hashing to distribute their keyspace \cite{Lakshman2010CassandraAD, DeCandia2007DynamoAH}. In these systems, nodes are assigned token ranges on a virtual hash ring. An element's hash value deterministically maps it to a specific point on the ring, and thus to a responsible node. The addition or removal of a node requires remapping only a localized subset of the keyspace, preserving a stable and deterministic mapping for the majority of data. Redis Cluster achieves a similar outcome using a hash slot partitioning scheme, where a fixed number of slots are distributed among nodes and can be migrated individually to scale the cluster \cite{redis-cluster-spec}.
@@ -235,7 +237,7 @@ The alignment creates a synergy with the underlying infrastructure of many distr
 
 The experimental results in \cite{Luo2018DistributedDC} confirm the efficacy of this approach, demonstrating significant memory savings over Bloom filter alternatives, full support for deletions, and seamless capacity scaling as nodes are added to the cluster.
 
-\subsubsection{Hierarchical Elasticity for Non-Uniform Growth Rates}
+\subsubsection{Hierarchical Elasticity}
 
 While the I2CF architecture provides fine-grained, bucket-level elasticity, its rebalancing mechanism is most effective under predictable, incremental growth in dataset cardinality. Distributed systems, however, often experience non-uniform growth patterns, including sudden spikes in insertion rates. In such scenarios, where the rate of cardinality growth exceeds the rate at which new buckets can be added and populated, the system may experience cascading insertion failures.
 
@@ -257,7 +259,7 @@ This architecture allows the system to increase its total capacity instantly by 
 
 The CCF architecture as defined by Luo et al. explicitly includes management policies to prevent this linear degradation \cite{Luo2021ACC}. It is not merely a chain of filters but a managed system that provides hierarchical scaling. This system operates at two granularities. The first is a fine-grained, bucket-level elasticity, where capacity adjustments occur within each constituent I2CF by adding or removing buckets from its consistent hash ring. The second is a coarse-grained, filter-level elasticity, which accommodates sudden load spikes by adding entire new I2CF instances. To control the growth of query latency, the architecture incorporates a consolidation mechanism, which periodically merges under-utilized instances to reduce the total number of instances, $s$. This hierarchical approach allows the system to manage capacity at multiple granularities, handling gradual growth through the fine-grained mechanism and absorbing sudden traffic spikes by adding new instances, while maintaining long-term performance through background consolidation.
 
-\subsubsection{Concurrency Control Strategies for Distributed Cuckoo Filters}
+\subsubsection{Concurrency Control Strategies}
 
 The deployment of Cuckoo Filters in a distributed environment introduces concurrency hazards. During an insertion operation, the filter performs a sequence of displacements that modify multiple bucket locations. A concurrent query examining these locations during this transient state may fail to find an element that has been evicted from its original bucket but not yet placed in its alternate location. This race condition, which we term a \emph{false miss}, results in a definitive negative answer for an element present in the set, thereby violating the data structure's membership guarantee.
 
@@ -281,7 +283,7 @@ For disaggregated memory architectures that utilize Remote Direct Memory Access 
 
 We note that across all three concurrency models, the no-false-negatives property of the Cuckoo Filter remains invariant. A query that returns false provides a correct answer: the element is not, and has never been (unless subsequently deleted), a member of the set. The specific concurrency strategy is an implementation detail dictated by the hardware topology and workload, but the membership guarantee is preserved.
 
-\subsubsection{Replication and Convergence in Eventually Consistent Systems}
+\subsubsection{Replication and Convergence}
 
 When we replicate Cuckoo Filters across multiple nodes for fault tolerance, the replicas may temporarily diverge due to network latency in propagating updates. We analyze the consequences of this divergence, particularly for deletion operations, and compare the behavior of Cuckoo Filters to that of standard and Counting Bloom Filters.
 

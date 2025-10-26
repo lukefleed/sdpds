@@ -13,3 +13,4 @@ fact_check_*
 *.blg
 papers/
 library.bib
+paper.xml

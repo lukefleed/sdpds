@@ -1,74 +1,14 @@
-% The design of scalable distributed systems confronts a fundamental tension: exactness in computation conflicts with efficiency in communication. As distributed infrastructures grow to encompass thousands of nodes processing millions of requests per second~\cite{Aravind_Sekar_2025}, the quadratic growth in potential communication paths ($O(N^2)$ for $N$ nodes) transforms network overhead from an optimization concern into an architectural constraint. Traditional approaches that guarantee exact answers - maintaining complete replicas, performing exhaustive synchronization, or transmitting entire datasets - become infeasible at scale.
+\section*{Introduction}
+\label{sec:introduction}
 
-% This report examines a class of algorithmic solutions that resolve this tension through principled approximation: probabilistic data structures. These algorithms trade perfect accuracy for substantial reductions in space complexity and communication overhead, while providing quantifiable error bounds. We focus on structures addressing two canonical problems in distributed systems: set membership testing (Bloom filters, Distributed Bloom Filters, Cuckoo filters) and cardinality estimation (HyperLogLog). Our analysis establishes that these are not ad-hoc optimizations but instantiations of a coherent design philosophy positioned within the PACELC consistency framework.
+The architectural paradigm for large-scale systems is shifting from co-located compute and storage towards resource disaggregation \cite{Grant2025CuckooFC, Langlet2025SketchDA}. We observe that current distributed systems, including high-performance key-value stores and data analytics platforms, increasingly rely on disaggregated memory and storage servers accessed over the network . In this model, compute, memory, and storage function as independent, network-attached services. The consequence of this separation is that the network fabric, which typically uses high-speed interconnects like RDMA, becomes the de-facto system backplane \cite{Grant2025CuckooFC, Langlet2025SketchDA}.
 
-% \subsection*{Central Thesis and Contributions}
+We note a parallel movement in computational models toward ephemeral and stateless functions \cite{Zaharia2012ResilientDD, Huang2016TowardHD}. These compute workers are instantiated for short durations, executing specific business logic without maintaining persistent local state. In a fully disaggregated architecture, this confluence of trends creates a fundamental tension. High-performance, state-dependent computation must execute on stateless, ephemeral workers over a network-centric substrate \cite{Grant2025CuckooFC}. A key challenge emerges because access latency to remote memory is an order-of-magnitude slower than access to local DRAM, even when using modern RDMA techniques \cite{Grant2025CuckooFC}. Every decision that requires consulting remote state, even for simple data validation, introduces a network round-trip cost that now dominates application latency \cite{Chang2006BigtableAD, Tarkoma2012TheoryAP}.
 
-% We advance three interconnected claims:
+This architectural tension manifests as an impedance mismatch between the need for low-latency state access and the physically distributed nature of disaggregated resources. We identify two canonical operations where this mismatch imposes unsustainable communication costs. The first is the validation of preconditions for state modification, a primitive operation in distributed databases known as set membership testing \cite{Tarkoma2012TheoryAP}. A compute function must determine if an element exists in a remote set, often to avoid a costly read-modify-write operation on a non-existent key \cite{Mosharraf2021ImprovingLA, Dayan2021ChuckyAS}. A deterministic query to a remote key-value store for every such validation check introduces a network round-trip, a cost that nullifies the performance benefits of local computation.
 
-% \textbf{Information-theoretic optimality.} The analyzed probabilistic structures achieve space complexity matching theoretical lower bounds up to constant factors. For set membership with false positive rate $\varepsilon$, Bloom filters require $\Theta(n \log(1/\varepsilon))$ bits, matching the information-theoretic minimum. For cardinality estimation with relative error $\sigma$, HyperLogLog requires $\Theta(1/\sigma^2)$ space, again optimal. This optimality establishes that further improvements require either relaxing error guarantees or solving different problems.
+The second manifestation is the execution of large-scale analytical aggregations, such as cardinality estimation \cite{Harmouch2017CardinalityEA}. In a data-parallel framework, an exact \texttt{COUNT(DISTINCT)} query requires a shuffle operation that transfers all unique data elements across the network to a common set of reducers for final aggregation \cite{Zaharia2012ResilientDD}. The communication cost of this operation is proportional to the dataset cardinality, rendering interactive-speed analytics over petabyte-scale data architecturally infeasible \cite{Heule2013HyperLogLogIP}. We argue that what is required are mechanisms that project a compact, queryable, and composable representation of the remote state directly to the compute layer, thereby bridging this impedance mismatch.
 
-% \textbf{Architectural positioning in consistency models.} Probabilistic structures instantiate the PA/EL quadrant of the PACELC theorem: they prioritize Availability during network partitions and Latency during normal operation, accepting probabilistic rather than strong Consistency. This positioning is not incidental but foundational - the communication savings that enable scalability derive precisely from relaxing consistency requirements. We formalize this relationship through comparative analysis with strong consistency protocols (Paxos, Raft), demonstrating order-of-magnitude reductions in message complexity.
+We propose that Probabilistic Data Structures (PDS) provide this architectural bridge. These structures function as compact summaries of remote state that can be efficiently transmitted to, maintained at, or queried by compute workers. We argue that their architectural value in modern systems derives not only from their sub-linear space complexity, but more critically from two properties: dynamic mutability and algebraic composability.
 
-% \textbf{Composability and algebraic structure.} The efficiency of these structures in distributed settings stems from algebraic properties of their merge operations. HyperLogLog sketches combine via componentwise maximum - a commutative, associative, and idempotent operation. This algebraic structure enables tree-based aggregation, eliminating centralized coordination bottlenecks. We establish that such properties are essential for scalable distributed aggregation, not incidental implementation details.
-
-\subsection*{Scope and Methodology}
-
-% This report adopts a formal, mathematical approach. We present complete algorithmic descriptions with rigorous complexity analysis, including full proofs of key theorems. Each structure is analyzed along three dimensions: (1) space complexity and error bounds, (2) distributed communication patterns and message complexity, and (3) position within the PACELC consistency framework. We derive results from first principles rather than empirical observation, though we reference implementation studies where they provide architectural insights~\cite{mayer2025comparative,luo2018distributed}.
-
-% The analysis assumes familiarity with probability theory, algorithm analysis, and distributed systems fundamentals. We employ standard complexity notation ($O$, $\Omega$, $\Theta$) and probabilistic analysis techniques. Proofs are provided for non-trivial results; straightforward derivations are stated without proof.
-
-\subsection*{Organization}
-
-% The report proceeds as follows. Section~\ref{sec:background} establishes theoretical foundations: formal definitions of distributed systems and scalability, the PACELC consistency framework, precise problem statements for set membership and cardinality estimation, and information-theoretic lower bounds on space complexity. This groundwork enables subsequent sections to position specific algorithms within a unified theoretical framework.
-
-% Section~\ref{sec:membership} analyzes the Bloom filter family for set membership. We begin with the classical Bloom filter, deriving its false positive probability and optimal parameter selection. The Distributed Bloom Filter extends this to multi-node reconciliation through unique per-peer hash mappings. The Cuckoo filter addresses a fundamental limitation - support for deletions - through fingerprint storage and cuckoo hashing. We conclude with comparative analysis across space, time, and message complexity dimensions.
-
-% Section~\ref{sec:cardinality} examines cardinality estimation via HyperLogLog. We derive the algorithm from probabilistic counting principles, prove its accuracy bounds ($\sigma \approx 1.04/\sqrt{m}$), and analyze its distributed aggregation properties. The commutative merge operation enables efficient tree-structured computation, reducing communication from $\Theta(Nn \log |\mathcal{U}|)$ (exact counting) to $\Theta(Nm \log \log |\mathcal{U}|)$ (HyperLogLog), where typically $m \ll n$.
-
-% Section~\ref{sec:consistency} provides synthesis through three lenses. First, we construct a comprehensive taxonomy classifying structures by mathematical properties (space-error tradeoffs), algorithmic properties (operation complexities), and distributed properties (merge semantics). Second, we position these structures within the PACELC framework, contrasting their PA/EL characteristics with PC/EC systems like Paxos. Third, we analyze real-world deployments, documenting how systems like Redis, PostgreSQL, and Apache Spark integrate probabilistic structures into production architectures.
-
-% The conclusion identifies open research directions: adversarial robustness, multi-dimensional tradeoff spaces, and hardware acceleration opportunities. We argue that as distributed systems continue scaling to billions of operations with millisecond latency requirements, probabilistic structures will transition from specialized techniques to architectural necessities.
-
-\section{Introduction}
-
-\subsection{The Scalability Imperative and the Communication Bottleneck}
-% Contenuto: Iniziare con il problema centrale. Un sistema distribuito esiste per scalare. La scalabilità è impedita dalla comunicazione.
-% - Definire "sistema distribuito" e "scalabilità" in modo conciso.
-% - Introdurre il \begin{theorem}[Quadratic Communication Complexity] e la sua \begin{proof}.
-% Fonte: Sezioni "The Communication Bottleneck" e introduzione di `background.tex`. Citazioni generali da Aravind Sekar (2025) e Gribble et al. (2000) [DDS] per contestualizzare la scala dei sistemi moderni.
-% Perché: (Step 1 & 2) Si parte dal problema fondamentale e si espone la limitazione dell'approccio "naive" (comunicazione completa). Questo stabilisce la necessità di "qualcosa" che sia communication-efficient.
-
-\subsection{An Architectural Framework for Trade-offs: The PACELC Theorem}
-% Contenuto: Introdurre il framework PACELC non come una definizione da manuale, ma come lo strumento concettuale per ragionare sulle soluzioni.
-% - Spiegare brevemente CAP, per poi passare a PACELC come estensione più granulare.
-% - \begin{definition}[PACELC Theorem].
-% - Enfatizzare il quadrante PA/EL: è qui che si posizionano le nostre soluzioni. Si sceglie esplicitamente di sacrificare la consistenza per latenza e disponibilità.
-% Fonte: Sezione "The PACELC Consistency Framework" in `background.tex`.
-% Perché: (Contesto) Fornisce la lente teorica attraverso cui analizzeremo tutte le strutture dati successive. Non è più un fatto isolato, ma uno strumento analitico fondamentale per la nostra tesi.
-
-\subsection{Problem Domain: Approximate Queries in Distributed Systems}
-% Contenuto: Definire formalmente i problemi che affronteremo, ora inquadrati nel contesto della necessità di efficienza comunicativa e del trade-off PA/EL.
-% - Introdurre il concetto di "query approssimata" come classe di soluzioni.
-% - \begin{definition}[Set Membership Problem] e \begin{definition}[Set Reconciliation Problem]. Spiegare perché la riconciliazione è una sfida comunicativa.
-% - \begin{definition}[Cardinality Estimation Problem]. Spiegare perché il count-distinct distribuito è un problema di comunicazione.
-% Fonte: Sezioni "The Set Membership Problem" e "The Cardinality Estimation Problem" in `background.tex`. La citazione per il caching in Set Reconciliation va verificata, `ramabaja2019distributed` è più sul protocollo DBF. `fan2000summarycache` è un riferimento più classico per il caching.
-% Perché: (Step 1, formalizzato) Definisce in modo rigoroso i problemi specifici che il paper risolverà. La loro presentazione segue la giustificazione della necessità di soluzioni approssimate.
-
-\subsection{The Probabilistic Approach and Contributions of this Work}
-% Contenuto: Questa è la sezione che unisce tutto e presenta la tesi.
-% - Introdurre le strutture dati probabilistiche come la soluzione concreta ai problemi definiti, operando all'interno del framework PACELC.
-% - Discutere il trade-off spazio-errore come quantificazione del costo della "non-consistenza". Inserire le formule di `m/n` per Bloom e `m` per HyperLogLog.
-% Fonte: Sezione "Space-Error Tradeoffs" e "The Probabilistic Approach" in `background.tex`. Le fonti (Tarkoma, Flajolet) sono corrette.
-% - Presentare le proprietà algebriche (merge) come l'abilitatore chiave per l'efficienza distribuita. Citare l'operazione di `max` per HyperLogLog e `OR` per Bloom.
-% Fonte: Sezione "The Probabilistic Approach" in `background.tex`, citazione su HLL merge è Heule et al. (2013).
-% - **Ora, e solo ora, enunciare le tesi.** Le "Central Thesis" non sono più una lista, ma le conclusioni logiche dell'argomentazione fin qui costruita:
-%   1. Le strutture che analizzeremo offrono soluzioni communication-efficient ai problemi di membership e cardinalità, operando nel quadrante PA/EL del PACELC.
-%   2. Lo fanno raggiungendo limiti quasi ottimali di trade-off spazio-errore, rendendole non solo pratiche ma teoricamente solide.
-%   3. La loro efficacia nei sistemi distribuiti deriva da proprietà algebriche componibili che evitano colli di bottiglia centralizzati.
-% Fonte: Sezione "Central Thesis" in `introduction.tex`, ma riformulata come conseguenza della narrazione.
-
-\subsection{Structure of the Report}
-% Contenuto: Mantenere l'attuale sezione "Organization" di `introduction.tex`, ma adattarla alla nuova struttura del paper (che ora ha un'unica introduzione).
-% Fonte: `introduction.tex`.
-% Perché: Fornisce la roadmap al lettore, come da prassi accademica.
+Dynamic mutability, specifically the ability to delete elements from a probabilistic oracle, allows the summary's state to remain synchronized with a live, changing dataset \cite{Fan2014CuckooFP}. This capability is a prerequisite for their use beyond static filtering, enabling accurate membership semantics in systems where the lifecycle of data includes explicit deletion and garbage collection \cite{Mosharraf2021ImprovingLA, Dayan2021ChuckyAS}. Algebraic composability, in contrast, enables the decentralized aggregation of summaries computed over distributed data partitions through well-defined, order-independent operations \cite{Heule2013HyperLogLogIP}. This property allows a system to perform parallel reductions without a central coordinator or the movement of raw data. We will demonstrate that it is the synthesis of these properties with low space overhead that elevates a specific class of PDS from tactical optimization to a strategic architectural enabler.
