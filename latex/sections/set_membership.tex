@@ -60,7 +60,7 @@ To support element deletion, the filter's structure must be augmented to track t
 
 The operations are redefined to act upon these counters. To insert an element, we increment the counters at the $k$ hash positions. To delete an element, we decrement the corresponding counters. A membership query returns true if and only if all corresponding counters are positive \cite{Fan1998SummaryCA}. The primary trade-off is a space complexity increase by a factor of $c$ compared to a standard Bloom filter. The selection of counter size $c$ must be sufficient to prevent overflow; analysis has shown that 4-bit counters are sufficient for most applications \cite{Fan1998SummaryCA, Tarkoma2012TheoryAP}. The arithmetic properties of the CBF are particularly useful in distributed systems for tasks such as set reconciliation, where the difference between two sets can be computed by subtracting one filter's counter array from another \cite{Guo2013SetRV}.
 
-\subsubsection{Scalable Bloom Filter}
+\subsubsection{Scalable Bloom Filter} \label{subsubsec:scalable-bloom}
 
 To accommodate sets of unknown or unbounded cardinality, the Scalable Bloom Filter (SBF) architecture replaces the single, fixed-size filter with a sequence of standard Bloom filters \cite{Almeida2007ScalableBF}.
 
