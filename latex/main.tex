@@ -1,4 +1,4 @@
-\documentclass[11pt,twocolumn]{article}
+\documentclass[11pt]{article}
 \usepackage[margin=0.75in]{geometry}
 \usepackage[utf8]{inputenc}
 \usepackage[english]{babel}
@@ -20,6 +20,7 @@
 \usepackage{mathtools}
 \usepackage{nccmath}
 \usepackage[most]{tcolorbox}
+\usepackage{multicol}
 
 \newcommand{\R}{\mathbb{R}}
 \newcommand{\N}{\mathbb{N}}
@@ -37,31 +38,38 @@
 \theoremstyle{remark}
 \newtheorem{remark}[theorem]{Remark}
 
-\title{An Analysis of Probabilistic Data Structures for Scalable, Communication-Constrained Distributed Systems}
+\title{Distributed Probabilistic Data Structures: A Survey}
 \author{Luca Lombardo}
-\date{\today}
+\date{}
 
 \setlength{\parskip}{0.5em}
 \setlength{\parindent}{0em}
 
 \begin{document}
 
-\input{sections/introduction}
+\maketitle
 
-\section{Set Membership}
-\label{sec:membership}
-\input{sections/set_membership}
-
-\section{Cardinality Estimation}
-\label{sec:cardinality}
-\input{sections/cardinality_estimation}
+\begin{abstract}
+    \lipsum[1]
+\end{abstract}
 
 
+\begin{multicols}{2}
+    \input{sections/introduction}
 
-\clearpage
-\bibliographystyle{unsrt}
-\bibliography{ref}
-\nocite{*}
+    \section{Set Membership}
+    \label{sec:membership}
+    \input{sections/set_membership}
+
+    \section{Cardinality Estimation}
+    \label{sec:cardinality}
+    \input{sections/cardinality_estimation}
+
+    \bibliographystyle{unsrt}
+    \bibliography{ref}
+    \nocite{*}
+\end{multicols}
+
 
 
 
