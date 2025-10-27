@@ -22,25 +22,25 @@ Third, can be performed in any order without coordination between nodes. The fin
 
 We observe that these three requirements collectively specify a class of binary operations over cardinality estimation oracles. The requirement for a property that satisfies these conditions motivates the subsequent subsection.
 
-\subsection{Algebraic Composability}
+\subsection{Composability}
 
 The constraints identified in the preceding subsection impose requirements on the structure of a distributed cardinality estimation oracle. We now introduce the property that resolves the shuffle bottleneck constraint.
 
-\begin{definition}[Algebraic Composability] \label{def:composability}
-    Let $\mathcal{D}_1, \dots, \mathcal{D}_k$ be $k$ instances of a probabilistic oracle, where each $\mathcal{D}_i$ is constructed over a data partition $S_i$. The oracle exhibits algebraic composability if there exists a binary operation $\cup$ such that the combined oracle $\mathcal{D}_{agg} = \mathcal{D}_1 \cup \dots \cup \mathcal{D}_k$ produces query results with error bounds identical to those of an oracle constructed in a single pass over the set union $S = \bigcup_{i=1}^k S_i$. The operation $\cup$ must be commutative, associative, and idempotent.
+\begin{definition}[Composability] \label{def:composability}
+    Let $\mathcal{D}_1, \dots, \mathcal{D}_k$ be $k$ instances of a probabilistic oracle, where each $\mathcal{D}_i$ is constructed over a data partition $S_i$. The oracle exhibits composability if there exists a binary operation $\cup$ such that the combined oracle $\mathcal{D}_{agg} = \mathcal{D}_1 \cup \dots \cup \mathcal{D}_k$ produces query results with error bounds identical to those of an oracle constructed in a single pass over the set union $S = \bigcup_{i=1}^k S_i$. The operation $\cup$ must be commutative, associative, and idempotent.
 \end{definition}
 
 The three properties specified in this definition address the three architectural requirements established above. Commutativity and associativity guarantee that the final result of combining a collection of oracles is independent of the order of aggregation. A system can perform reductions in parallel, in a hierarchical tree structure, or in any arbitrary sequence without requiring coordination or ordering constraints. These properties enable the parallelizability requirement: distributed workers can compute partial estimates concurrently, and intermediate aggregators can combine these estimates in any order dictated by network topology or load balancing considerations.
 
 Idempotency ensures that re-combining a duplicate oracle does not alter the aggregate state. This simplifies fault-tolerance protocols. A distributed aggregation system can employ message delivery with at-least-once semantics, obviating the need for more complex exactly-once delivery mechanisms. If a network failure causes a partial estimate to be retransmitted and merged multiple times, the idempotency property guarantees that the final result remains correct.
 
-Collectively, these properties enable the non-additive \texttt{COUNT(DISTINCT)} problem to be reframed as a decomposable aggregation problem, analogous to a \texttt{SUM} operation. The communication cost of distributed cardinality estimation becomes proportional to the size of the compact oracle representation, not to the dataset cardinality. This transformation is the architectural consequence of algebraic composability.
+Collectively, these properties enable the non-additive \texttt{COUNT(DISTINCT)} problem to be reframed as a decomposable aggregation problem, analogous to a \texttt{SUM} operation. The communication cost of distributed cardinality estimation becomes proportional to the size of the compact oracle representation, not to the dataset cardinality. This transformation is the architectural consequence of composability.
 
 This property is not a performance optimization but a structural requirement for oracles that must aggregate information computed over partitioned data in large-scale analytical systems. Distributed SQL engines that execute \texttt{GROUP BY} queries with cardinality aggregation, stream processing systems that compute distinct counts over windowed data, and real-time analytics platforms that maintain cardinality estimates across organizational hierarchies all require cardinality estimation oracles whose internal state can be combined through the operation specified in Definition~\ref{def:composability}. We now examine the architectural realization of this property in the HyperLogLog sketch.
 
 \subsection{HyperLogLog} \label{subsec:hyperloglog}
 
-The HyperLogLog sketch satisfies the conditions  established in Definition~\ref{def:composability}. Its union operation executes as a register-wise maximum, requiring time proportional only to the number of registers $m$, independent of dataset cardinality. This operation is commutative, associative, and idempotent. The property derives from the design of the sketch as a fixed-size summary that encodes cardinality information through the maximum observable in each of $m$ independent stochastic experiments. We analyze the technical mechanisms that provide this capability and examine the distributed deployment patterns that algebraic composability enables.
+The HyperLogLog sketch satisfies the conditions  established in Definition~\ref{def:composability}. Its union operation executes as a register-wise maximum, requiring time proportional only to the number of registers $m$, independent of dataset cardinality. This operation is commutative, associative, and idempotent. The property derives from the design of the sketch as a fixed-size summary that encodes cardinality information through the maximum observable in each of $m$ independent stochastic experiments. We analyze the technical mechanisms that provide this capability and examine the distributed deployment patterns that composability enables.
 
 \subsubsection{Stochastic Averaging and the Harmonic Mean}
 
