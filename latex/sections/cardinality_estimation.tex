@@ -2,7 +2,7 @@
 % INIZIO DELLA SEZIONE SULLA STIMA DI CARDINALITÀ
 % ==============================================================================
 
-Having established the architectural necessity of probabilistic oracles for set membership queries, we now address the related but quantitatively distinct challenge of estimating the number of unique elements within a large-scale dataset. This task, formally known as the cardinality estimation problem, is a fundamental primitive in data profiling, network monitoring, and large-scale analytics \cite{Harmouch2017CardinalityEA}.
+Having established the architectural necessity of probabilistic oracles for set membership queries, we now address the related but quantitatively distinct challenge of estimating the number of unique elements within a large-scale dataset. This task, known as the cardinality estimation problem, is a fundamental primitive in data profiling, network monitoring, and large-scale analytics \cite{Harmouch2017CardinalityEA}.
 
 \begin{definition}[The Cardinality Estimation Problem]
     Given a multiset $S$ of elements drawn from a universe $\mathcal{U}$, the cardinality estimation problem is to determine $|S|$, defined as the number of distinct elements in $S$.
@@ -10,11 +10,37 @@ Having established the architectural necessity of probabilistic oracles for set 
 
 In a distributed, data-parallel framework, a naive implementation of this task necessitates a multi-stage execution. In an initial stage, each parallel worker processes a partition of the input multiset to produce a local set of unique elements. Subsequently, the framework must perform a shuffle operation, transmitting all unique elements from all partitions across the network to a common set of reducer nodes for final aggregation and deduplication \cite{Zaharia2012ResilientDD}.
 
-This shuffle operation constitutes the primary architectural bottleneck. The communication cost of this approach is not fixed; it is proportional to the number of unique elements and their size. For datasets with high cardinality, the network I/O required for the shuffle dominates the total execution time, rendering the approach impractical for interactive or large-scale analytics. This communication overhead represents a fundamental physical constraint that makes exact, deterministic solutions for distributed cardinality estimation architecturally unsustainable \cite{Zaharia2012ResilientDD}.
+This shuffle operation constitutes the primary bottleneck. The communication cost of this approach is not fixed; it is proportional to the number of unique elements and their size. For datasets with high cardinality, the network I/O required for the shuffle dominates the total execution time, rendering the approach impractical for interactive or large-scale analytics. This communication overhead represents a fundamental physical constraint that makes exact, deterministic solutions for distributed cardinality estimation architecturally unsustainable \cite{Zaharia2012ResilientDD}.
 
-\subsection{The HyperLogLog Algorithm}
+The architectural challenge is to enable cardinality aggregation without the shuffle of raw data. A distributed cardinality estimation oracle must support the combination of partial estimates computed on different data partitions into a global estimate, where this combination operation:
 
-The HyperLogLog (HLL) algorithm provides a composable, fixed-size data structure, or sketch, that offers a probabilistic solution to the cardinality estimation problem. By constructing a compact summary of a dataset, it replaces the network-intensive shuffle of raw data with the transmission of the sketch itself, thereby transforming a communication-bound problem into one that is computationally manageable. Its design is predicated on the principles of stochastic averaging and the use of a harmonic mean for robust aggregation.
+First, produces a result with error bounds identical to those of an oracle constructed in a single pass over the complete dataset. This property ensures that distributed aggregation does not introduce additional approximation error beyond the inherent error of the probabilistic estimator.
+
+Second, executes in time independent of the dataset cardinality. The combination of two partial estimates must require computational cost proportional only to the size of the estimate representations, not to the number of elements they summarize. This transforms the communication-bound shuffle operation into a fixed-cost sketch transmission.
+
+Third, can be performed in any order without coordination between nodes. The final global estimate must be identical regardless of the sequence in which partial estimates are combined. This property enables distributed reduction without sequential dependencies or central coordination bottlenecks.
+
+We observe that these three requirements collectively specify a class of binary operations over cardinality estimation oracles. The requirement for a property that satisfies these conditions motivates the subsequent subsection.
+
+\subsection{Algebraic Composability}
+
+The constraints identified in the preceding subsection impose requirements on the structure of a distributed cardinality estimation oracle. We now introduce the property that resolves the shuffle bottleneck constraint.
+
+\begin{definition}[Algebraic Composability] \label{def:composability}
+    Let $\mathcal{D}_1, \dots, \mathcal{D}_k$ be $k$ instances of a probabilistic oracle, where each $\mathcal{D}_i$ is constructed over a data partition $S_i$. The oracle exhibits algebraic composability if there exists a binary operation $\cup$ such that the combined oracle $\mathcal{D}_{agg} = \mathcal{D}_1 \cup \dots \cup \mathcal{D}_k$ produces query results with error bounds identical to those of an oracle constructed in a single pass over the set union $S = \bigcup_{i=1}^k S_i$. The operation $\cup$ must be commutative, associative, and idempotent.
+\end{definition}
+
+The three properties specified in this definition address the three architectural requirements established above. Commutativity and associativity guarantee that the final result of combining a collection of oracles is independent of the order of aggregation. A system can perform reductions in parallel, in a hierarchical tree structure, or in any arbitrary sequence without requiring coordination or ordering constraints. These properties enable the parallelizability requirement: distributed workers can compute partial estimates concurrently, and intermediate aggregators can combine these estimates in any order dictated by network topology or load balancing considerations.
+
+Idempotency ensures that re-combining a duplicate oracle does not alter the aggregate state. This simplifies fault-tolerance protocols. A distributed aggregation system can employ message delivery with at-least-once semantics, obviating the need for more complex exactly-once delivery mechanisms. If a network failure causes a partial estimate to be retransmitted and merged multiple times, the idempotency property guarantees that the final result remains correct.
+
+Collectively, these properties enable the non-additive \texttt{COUNT(DISTINCT)} problem to be reframed as a decomposable aggregation problem, analogous to a \texttt{SUM} operation. The communication cost of distributed cardinality estimation becomes proportional to the size of the compact oracle representation, not to the dataset cardinality. This transformation is the architectural consequence of algebraic composability.
+
+This property is not a performance optimization but a structural requirement for oracles that must aggregate information computed over partitioned data in large-scale analytical systems. Distributed SQL engines that execute \texttt{GROUP BY} queries with cardinality aggregation, stream processing systems that compute distinct counts over windowed data, and real-time analytics platforms that maintain cardinality estimates across organizational hierarchies all require cardinality estimation oracles whose internal state can be combined through the operation specified in Definition~\ref{def:composability}. We now examine the architectural realization of this property in the HyperLogLog sketch.
+
+\subsection{HyperLogLog} \label{subsec:hyperloglog}
+
+The HyperLogLog sketch satisfies the conditions  established in Definition~\ref{def:composability}. Its union operation executes as a register-wise maximum, requiring time proportional only to the number of registers $m$, independent of dataset cardinality. This operation is commutative, associative, and idempotent. The property derives from the design of the sketch as a fixed-size summary that encodes cardinality information through the maximum observable in each of $m$ independent stochastic experiments. We analyze the technical mechanisms that provide this capability and examine the distributed deployment patterns that algebraic composability enables.
 
 \subsubsection{Stochastic Averaging and the Harmonic Mean}
 
@@ -38,9 +64,9 @@ The final cardinality estimate is derived from the state of these registers. The
     where $\alpha_m$ is a bias correction constant that depends on $m$.
 \end{proposition}
 
-This mechanism produces a fixed-size sketch of $\Theta(m \log\log n)$ bits that summarizes the cardinality of a set containing $n$ elements. The theoretical relative error of this estimate is approximately $1.04/\sqrt{m}$ \cite{Flajolet2007HyperLogLogTA}. The critical property for distributed systems is that these fixed-size sketches can be efficiently combined.
+This mechanism produces a fixed-size sketch of $\Theta(m \log\log n)$ bits that summarizes the cardinality of a set containing $n$ elements. The theoretical relative error of this estimate is approximately $1.04/\sqrt{m}$ \cite{Flajolet2007HyperLogLogTA}. The critical property for distributed systems is that these fixed-size sketches can be efficiently combined through the union operation we analyze in the subsequent subsubsection.
 
-\subsubsection{Union} \label{subsubsec:hll-union}
+\subsubsection{Union and Algebraic Properties} \label{subsubsec:hll-union}
 
 The utility of the HyperLogLog sketch in distributed systems is derived from its support for a computationally efficient union, or merge, operation. This operation allows sketches computed on disparate data partitions to be combined to produce a sketch representing the union of the underlying sets.
 
@@ -54,7 +80,7 @@ The utility of the HyperLogLog sketch in distributed systems is derived from its
 
 The register-wise \texttt{max} operation endows the HLL union with a set of algebraic properties that are fundamental to its scalability in parallel and distributed computations.
 
-\begin{theorem}[Algebraic Properties of the Union Operation \cite{Heule2013HyperLogLogIP}] \label{thm:hll-union-properties}
+\begin{theorem}[Properties of the Union Operation \cite{Heule2013HyperLogLogIP}] \label{thm:hll-union-properties}
     The HyperLogLog union operation is commutative, associative, and idempotent. For any sketches $M_A$, $M_B$, and $M_C$:
     \begin{itemize}
         \item Commutativity: $M_A \cup M_B = M_B \cup M_A$
@@ -63,13 +89,15 @@ The register-wise \texttt{max} operation endows the HLL union with a set of alge
     \end{itemize}
 \end{theorem}
 
-These properties have direct architectural implications. Commutativity and associativity guarantee that the final result of merging a collection of sketches is independent of the order of aggregation. This allows a system to perform reductions in parallel, in a hierarchical tree structure, or in any arbitrary sequence without requiring coordination or ordering constraints. Idempotency ensures that re-merging a duplicate sketch does not alter the aggregate state. This property simplifies fault-tolerance protocols, as it allows for message delivery with at-least-once semantics, obviating the need for more complex exactly-once delivery mechanisms for sketch aggregation \cite{Heule2013HyperLogLogIP}.
+The register-wise maximum operation constitutes the binary operation $\cup$ required by Definition~\ref{def:composability}. The commutativity and associativity guarantee order-independent aggregation. The idempotency property ensures that the operation satisfies the requirements for fault-tolerant distributed reduction.
+
+Commutativity and associativity guarantee that the final result of merging a collection of sketches is independent of the order of aggregation. This allows a system to perform reductions in parallel, in a hierarchical tree structure, or in any arbitrary sequence without requiring coordination or ordering constraints. Idempotency ensures that re-merging a duplicate sketch does not alter the aggregate state. This simplifies fault-tolerance protocols, as it allows for message delivery with at-least-once semantics, obviating the need for more complex exactly-once delivery mechanisms for sketch aggregation \cite{Heule2013HyperLogLogIP}.
 
 Collectively, these properties enable the non-additive \texttt{COUNT(DISTINCT)} problem to be reframed as a decomposable aggregation problem, analogous to a \texttt{SUM}. This allows the computation to be parallelized with minimal communication overhead, a defining characteristic for scalable distributed systems \cite{Zaharia2012ResilientDD}.
 
 \subsection{Architectural Implications}
 
-The algebraic properties of the union operation provide a guarantee of correctness for distributed aggregation, enabling the algorithm's integration into data-parallel frameworks. These properties, however, describe the logical behavior of sketch composition, not the physical realities of executing such compositions over millions of instances in a resource-constrained environment. When applied to common analytical workloads, such as large-scale group-by aggregations, the standard HLL algorithm encounters limitations related to estimation accuracy at low cardinalities and communication overhead not apparent from its initial formulation.
+The deployment patterns that these properties enable, documented in \S~\ref{subsubsec:hll-patterns}, instantiate the hierarchical aggregation architecture analyzed in the framework (\S~\ref{subsubsec:composability-hierarchy}). These properties, however, describe the logical behavior of sketch composition, not the physical realities of executing such compositions over millions of instances in a resource-constrained environment. When applied to common analytical workloads, such as large-scale group-by aggregations, the standard HLL algorithm encounters limitations related to estimation accuracy at low cardinalities and communication overhead not apparent from its initial formulation.
 
 \subsubsection{Challenges at Scale}
 
@@ -103,15 +131,17 @@ The use of a sparse representation is a fundamental enabler for interactive dist
 
 \subsection{Architectures and Implementations}
 
-The algebraic properties of HyperLogLog sketches, particularly their efficient and composable union operation, enable their integration into diverse distributed computing architectures. The choice of architecture is typically dictated by the nature of the data workload, whether batch or streaming, and the desired query patterns.
+The properties of HyperLogLog sketches, particularly their efficient and composable union operation, enable their integration into diverse distributed computing architectures. The choice of architecture is typically dictated by the nature of the data workload, whether batch or streaming, and the desired query patterns.
 
 \subsubsection{Architectural Patterns} \label{subsubsec:hll-patterns}
 
-We analyze three canonical architectural patterns for distributed HLL computation. The first is the MapReduce paradigm, fundamental for large-scale batch processing. In this model, an input dataset is partitioned across worker nodes. The map stage generates local HLL sketches for each data partition, creating a separate sketch for each grouping key in a group-by operation. The system then shuffles these compact sketches to reducer nodes. In the reduce stage, each reducer applies the union operation to merge the sketches it receives for a given key. The correctness of this stage, where sketches may arrive in an arbitrary order, is formally guaranteed by the commutativity and associativity of the union operation \cite{Zaharia2012ResilientDD}. This pattern drastically reduces network I/O compared to an exact distributed distinct count.
+We analyze three canonical architectural patterns for distributed HLL computation. The first is the MapReduce paradigm. In this model, an input dataset is partitioned across worker nodes. The map stage generates local HLL sketches for each data partition, creating a separate sketch for each grouping key in a group-by operation. The system then shuffles these compact sketches to reducer nodes. In the reduce stage, each reducer applies the union operation to merge the sketches it receives for a given key. The correctness of this stage, where sketches may arrive in an arbitrary order, is formally guaranteed by the commutativity and associativity of the union operation \cite{Zaharia2012ResilientDD}. This pattern drastically reduces network I/O compared to an exact distributed distinct count.
 
 The second pattern is designed for real-time aggregation in stream processing systems. This architecture partitions an unbounded data stream into logical windows, such as fixed time intervals or element counts. For each active window, an operator maintains a local HLL sketch. The composability of sketches allows for efficient computation over combined windows. To compute the cardinality over a time interval $T$ composed of sub-intervals $t_1, \ldots, t_k$, the system retrieves the corresponding sketches $M_{t_1}, \ldots, M_{t_k}$ and computes the final sketch as $M_T = \bigcup_{i=1}^{k} M_{t_i}$. The cost of this operation is independent of the raw data volume within the interval, enabling efficient, stateful stream processing \cite{Huang2016TowardHD}.
 
 The third pattern is a hierarchical, or tree-based, aggregation model, well-suited for systems with a natural data hierarchy \cite{Wilms2021TreebasedNA}. In this model, leaf nodes generate sketches from raw data streams. Intermediate nodes in the hierarchy periodically collect and merge the sketches from their children to create higher-level aggregates. The validity of this hierarchical model rests upon the associativity of the HLL union, which ensures that the final global sketch is identical regardless of the tree's depth or the order of intermediate merge operations. This pattern enables multi-resolution querying, where queries for cardinality at different levels of the hierarchy can be answered by accessing pre-aggregated sketches without reprocessing data from lower levels.
+
+These three patterns instantiate the hierarchical aggregation architecture analyzed in the framework (\S~\ref{subsubsec:composability-hierarchy}). The framework establishes that composability-optimized structures enable parallel reduction through tree-based merge operations. The MapReduce pattern implements a two-level hierarchy (workers and reducers). The stream processing pattern implements temporal hierarchies (window aggregation). The tree-based pattern implements spatial hierarchies (organizational or geographical aggregation levels). All three patterns rely on the properties established in Theorem~\ref{thm:hll-union-properties} to guarantee correctness under arbitrary merge orderings.
 
 \subsubsection{Implementation Case Studies}
 
