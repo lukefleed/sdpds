@@ -11,7 +11,6 @@ Composability requires that the oracle's state be derivable from commutative ope
 
 This information-theoretic tension explains the absence of structures that provide both properties optimally. A structure that retains sufficient information for targeted deletion (explicit element fingerprints) cannot perform order-independent aggregation, as the merge operation must track which elements have been processed to avoid double-counting. Conversely, a structure that performs order-independent aggregation (lossy compression to maximum observables) cannot support targeted deletion, as the information required to identify a specific element's contribution has been discarded. This reflects a trade-off between maintaining element-level granularity (required for deletion) and achieving compression through information loss (required for composable aggregation).
 
-The consequences of this tension are examined in Section~\ref{sec:open-problems}, where we analyze the structural gap for workloads requiring both properties and evaluate hybrid system designs that maintain separate specialized oracles.
 
 \subsection{Deployment Patterns and Property Requirements}
 \label{subsec:patterns-from-properties}
@@ -71,7 +70,7 @@ The intersection of data lifecycle dynamics and query result formation determine
 
 \textit{Static or Append-with-expiry + Multi-partition}: Workloads require composability but not mutability. The HyperLogLog sketch (subsection~\ref{subsec:hyperloglog}) is the exemplar structure. Application contexts include cardinality estimation in MapReduce batch jobs over immutable datasets, real-time analytics computing distinct counts over sliding time windows, and multi-datacenter monitoring aggregating metrics across geographic regions.
 
-\textit{Fully-dynamic + Multi-partition}: Workloads require both mutability and composability. No single structure provides optimal performance for both properties, as demonstrated in subsection~\ref{subsec:core-properties}. This classification identifies a structural gap. Application contexts include distributed databases that must track element deletions for membership queries while aggregating cardinality estimates for query optimization, and distributed cache systems that must track cache invalidations while computing global hit rate statistics. The resolution strategies for this gap are examined in Section~\ref{sec:open-problems}.
+\textit{Fully-dynamic + Multi-partition}: Workloads require both mutability and composability. No single structure provides optimal performance for both properties, as demonstrated in subsection~\ref{subsec:core-properties}. This classification identifies a structural gap. Application contexts include distributed databases that must track element deletions for membership queries while aggregating cardinality estimates for query optimization, and distributed cache systems that must track cache invalidations while computing global hit rate statistics.
 
 \textit{Static + Single-partition}: Workloads require neither mutability nor composability. A standard Bloom filter suffices. This classification falls outside the scope of the framework, as the constraints that motivate probabilistic oracle deployment (state synchronization for dynamic data, distributed aggregation for partitioned data) do not apply.
 

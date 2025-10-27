@@ -38,7 +38,7 @@
 \theoremstyle{remark}
 \newtheorem{remark}[theorem]{Remark}
 
-\title{Distributed Probabilistic Data Structures: A Survey}
+\title{A Framework for Probabilistic Oracles in Distributed Systems}
 \author{Luca Lombardo}
 \date{}
 
@@ -50,8 +50,10 @@
 \maketitle
 
 \begin{abstract}
-    \lipsum[1]
+    Disaggregated systems require compact summaries of remote state to resolve the impedance mismatch between stateless compute and network-separated storage. We establish that the value of probabilistic data structures derives from two properties: dynamic mutability enables state synchronization through element deletion, while algebraic composability enables distributed aggregation through commutative operations. These properties address orthogonal constraints and impose conflicting requirements on state representation. We demonstrate through Cuckoo Filters and HyperLogLog that specific deployment patterns emerge as consequences of these properties, and derive decision criteria for structure selection based on workload characteristics.
 \end{abstract}
+
+% \tableofcontents
 
 
 \begin{multicols}{2}
@@ -71,9 +73,9 @@
     \label{sec:framework}
     \input{sections/framework}
 
-    \section{Open Problems and Structural Gaps}
-    \label{sec:open-problems}
-    \input{sections/open}
+    % \section{Open Problems and Structural Gaps}
+    % \label{sec:open-problems}
+    % \input{sections/open}
 
     \section{Conclusion}
     \label{sec:conclusion}
