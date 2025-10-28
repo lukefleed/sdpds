@@ -23,14 +23,14 @@ We observe that these three requirements collectively specify a class of binary 
 The constraints identified in the preceding sections impose requirements on the structure of a distributed cardinality estimation oracle. We now introduce the property that resolves the shuffle bottleneck constraint.
 
 \begin{definition}[Composability] \label{def:composability}
-    Let $\mathcal{D}_1, \dots, \mathcal{D}_k$ be $k$ instances of a probabilistic oracle, where each $\mathcal{D}_i$ is constructed over a data partition $S_i$. The oracle exhibits composability if there exists a binary operation $\cup$ such that the combined oracle $\mathcal{D}_{agg} = \mathcal{D}_1 \cup \dots \cup \mathcal{D}_k$ produces query results with error bounds identical to those of an oracle constructed in a single pass over the set union $S = \bigcup_{i=1}^k S_i$. The operation $\cup$ must be commutative, associative, and idempotent.
+    Let $\mathcal{D}_1, \dots, \mathcal{D}_k$ be $k$ instances of a probabilistic oracle, where each $\mathcal{D}_i$ is constructed over a data partition $S_i$. The oracle exhibits composability if there exists a binary operation $\cup$ such that the combined oracle $\mathcal{D}_{agg} = \mathcal{D}_1 \cup \dots \cup \mathcal{D}_k$ produces estimates with expected relative error $\mathbb{E}[|\hat{n} - n|/n]$ asymptotically equivalent to an oracle constructed over $S = \bigcup_{i=1}^k S_i$ in a single pass. The operation $\cup$ must be commutative and associative. For fault tolerance under at-least-once delivery semantics, the operation must additionally be idempotent.
 \end{definition}
 
-The three properties specified in this definition address the three architectural requirements established above. Commutativity and associativity guarantee that the final result of combining a collection of oracles is independent of the order of aggregation. A system can perform reductions in parallel, in a hierarchical tree structure, or in any arbitrary sequence without requiring coordination or ordering constraints. These properties enable the parallelizability requirement: distributed workers can compute partial estimates concurrently, and intermediate aggregators can combine these estimates in any order dictated by network topology or load balancing considerations.
+Commutativity and associativity guarantee that the final result of combining a collection of oracles is independent of the order of aggregation. A system can perform reductions in parallel, in a hierarchical tree structure, or in any arbitrary sequence without requiring coordination or ordering constraints.
 
 Idempotency ensures that re-combining a duplicate oracle does not alter the aggregate state. This simplifies fault-tolerance protocols. A distributed aggregation system can employ message delivery with at-least-once semantics, obviating the need for more complex exactly-once delivery mechanisms. If a network failure causes a partial estimate to be retransmitted and merged multiple times, the idempotency property guarantees that the final result remains correct.
 
-Collectively, these properties enable the non-additive \texttt{COUNT(DISTINCT)} problem to be reframed as a decomposable aggregation problem, analogous to a \texttt{SUM} operation. The communication cost of distributed cardinality estimation becomes proportional to the size of the compact oracle representation, not to the dataset cardinality. This transformation is the architectural consequence of composability.
+Collectively, these properties enable the non-additive \texttt{COUNT(DISTINCT)} problem to be reframed as a decomposable aggregation problem, analogous to a \texttt{SUM} operation. The communication cost of distributed cardinality estimation becomes proportional to the size of the compact oracle representation, not to the dataset cardinality.
 
 % Distributed SQL engines that execute \texttt{GROUP BY} queries with cardinality aggregation, stream processing systems that compute distinct counts over windowed data, and real-time analytics platforms that maintain cardinality estimates across organizational hierarchies all require cardinality estimation oracles whose internal state can be combined through the operation specified in \ref{def:composability}. We now examine the realization of this property in the HyperLogLog sketch.
 
@@ -43,12 +43,12 @@ The HyperLogLog sketch satisfies the conditions  established in \ref{def:composa
 We sum up the core mechanics of the HyperLogLog algorithm as introduced by Flajolet et al. \cite{Flajolet2007HyperLogLogTA}. The algorithm maps elements to an array of registers and records an observable based on the bit patterns of their hash values.
 
 \begin{definition}[HyperLogLog Sketch] \label{def:hll-sketch}
-    A HyperLogLog sketch consists of an array $M$ of $m=2^p$ registers, where $p$ is a precision parameter. The sketch is associated with a hash function $h: \mathcal{U} \to \{0,1\}^L$ that maps elements from a universe $\mathcal{U}$ to binary strings of sufficient length $L$. Each register $M[j]$ is initialized to 0.
+    A HyperLogLog sketch consists of an array $M$ of $m=2^p$ registers, where $p$ is a precision parameter. The sketch is associated with a hash function $h: \mathcal{U} \to \{0,1\}^L$ that distributes elements uniformly over the output space and maps elements from a universe $\mathcal{U}$ to binary strings of sufficient length $L$. Each register $M[j]$ is initialized to 0.
 \end{definition}
 
 The algorithm processes a multiset by updating this array of registers. For each element, a single hash value is used to select a register and compute an update value. This process, known as stochastic averaging, uses one hash function to simulate $m$ independent experiments, with each register representing one experiment.
 
-To insert an element $v \in S$, we first compute its hash value $x = h(v)$. The first $p$ bits of $x$ are used to determine a register index $j \in \{0, \dots, m-1\}$. Let $w$ be the remaining $L-p$ bits of $x$. We then compute an observable $\rho(w)$, defined as one plus the number of leading zeros in $w$. The corresponding register is updated according to the rule $M[j] := \max(M[j], \rho(w))$. After all elements have been processed, each register $M[j]$ contains the maximum $\rho$ value observed for any element mapped to that register.
+To insert an element $v \in S$, we first compute its hash value $x = h(v)$. The first $p$ bits of $x$ are used to determine a register index $j \in \{0, \dots, m-1\}$. Let $w$ be the remaining $L-p$ bits of $x$. We then compute an observable $\rho(w) = 1 + \text{lz}(w)$, where $\text{lz}(w)$ denotes the number of leading zeros in $w$. The corresponding register is updated according to the rule $M[j] := \max(M[j], \rho(w))$. After all elements have been processed, each register $M[j]$ contains the maximum $\rho$ value observed for any element mapped to that register.
 
 The final cardinality estimate is derived from the state of these registers. The algorithm uses the harmonic mean of the values $2^{M[j]}$, which is less sensitive to outlier values than the arithmetic or geometric mean.
 
@@ -71,8 +71,15 @@ The utility of the HyperLogLog sketch in distributed systems derives from its su
     \begin{equation*}
         M_{1 \cup 2}[j] := \max(M_1[j], M_2[j]) \quad \forall j \in \{0, \ldots, m-1\}
     \end{equation*}
-    The resulting sketch $M_{1 \cup 2}$ is identical to the sketch that would have been generated by processing all elements from both $S_1$ and $S_2$ in a single pass.
 \end{definition}
+
+\begin{theorem}[Union Equivalence \cite{Heule2013HyperLogLogIP}]
+    The sketch $M_{1 \cup 2}$ produced by the union operation is equivalent to the sketch that would have been generated by processing all elements from both $S_1$ and $S_2$ in a single pass.
+\end{theorem}
+
+\begin{proof}
+    For any element $x \in S_1 \cup S_2$, its contribution is to set $M[j] := \max(M[j], \rho(w))$ where $j = h(x) \bmod m$ and $\rho(w)$ is the observable derived from $x$. In the single-pass case, this update occurs when $x$ is processed. In the merge case, if $x \in S_1$, then $M_1[j] \geq \rho(w)$ after $M_1$ is constructed. When merging, $M_{1 \cup 2}[j] = \max(M_1[j], M_2[j]) \geq \rho(w)$. Since the update rule is $M[j] := \max(M[j], \rho(w))$, the final value $M_{1 \cup 2}[j]$ is the maximum $\rho$ observed for any element in $S_1 \cup S_2$ that maps to register $j$, which is identical to the value obtained in a single pass over $S_1 \cup S_2$.
+\end{proof}
 
 \begin{theorem}[Properties of the Union Operation \cite{Heule2013HyperLogLogIP}] \label{thm:hll-union-properties}
     The HyperLogLog union operation is commutative, associative, and idempotent. For any sketches $M_A$, $M_B$, and $M_C$ we have commutativity
@@ -126,7 +133,7 @@ Second, it forces the use of a 64-bit hash function. This change expands the has
 The most significant architectural refinement is the introduction of a dual-representation sketch that adapts its storage format based on cardinality. This design directly addresses the communication overhead associated with shuffling a massive number of sketches.
 
 \begin{definition}[Sparse and Dense Representations \cite{Heule2013HyperLogLogIP}]
-    A HyperLogLog++ sketch can exist in one of two formats. A \texttt{dense} format, which is the standard HLL representation: a fixed-size array of $m$ registers. A \texttt{sparse} format, used for low cardinalities, which stores only the non-zero registers as a compressed, sorted list of (index, value) pairs. The sketch begins in the \texttt{sparse} format and transitions to the \texttt{dense} format only when its size in the sparse representation would exceed the size of the dense format.
+    A HyperLogLog++ sketch can exist in one of two formats. A \texttt{dense} format, which is the standard HLL representation: a fixed-size array of $m$ registers. A \texttt{sparse} format, used for low cardinalities, which stores only the non-zero registers as a variable-length encoded, sorted list of (index, value) pairs. The sketch begins in the \texttt{sparse} format and transitions to the \texttt{dense} format when the encoded byte size of the sparse representation exceeds the byte size of the dense format.
 \end{definition}
 
 The sparse format reduces the memory footprint of these numerous low-cardinality sketches by an order of magnitude or more. This reduction in size directly translates to a commensurate reduction in the volume of data that must be serialized, transmitted during the shuffle phase, and deserialized by reducer nodes \cite{Heule2013HyperLogLogIP}.
@@ -139,9 +146,13 @@ The properties of HyperLogLog sketches, particularly their efficient and composa
 
 We analyze three canonical patterns for distributed HLL computation. The first is the MapReduce paradigm. In this model, an input dataset is partitioned across worker nodes. The map stage generates local HLL sketches for each data partition, creating a separate sketch for each grouping key in a group-by operation. The system then shuffles these compact sketches to reducer nodes. In the reduce stage, each reducer applies the union operation to merge the sketches it receives for a given key. The correctness of this stage, where sketches may arrive in an arbitrary order, is guaranteed by the commutativity and associativity of the union operation \cite{Zaharia2012ResilientDD}.
 
-The second pattern is designed for real-time aggregation in stream processing systems. This architecture partitions an unbounded data stream into logical windows, such as fixed time intervals or element counts. For each active window, an operator maintains a local HLL sketch. The composability of sketches allows for efficient computation over combined windows. To compute the cardinality over a time interval $T$ composed of sub-intervals $t_1, \ldots, t_k$, the system retrieves the corresponding sketches $M_{t_1}, \ldots, M_{t_k}$ and computes the final sketch as $M_T = \bigcup_{i=1}^{k} M_{t_i}$. The cost of this operation is independent of the raw data volume within the interval, enabling efficient, stateful stream processing \cite{Huang2016TowardHD}.
+The second pattern is designed for real-time aggregation in stream processing systems. This architecture partitions an unbounded data stream into logical windows, such as fixed time intervals or element counts. For each active window, an operator maintains a local HLL sketch. The composability of sketches allows for efficient computation over combined windows. To compute the cardinality over a time interval $T$ composed of non-overlapping sub-intervals $t_1, \ldots, t_k$, the system retrieves the corresponding sketches $M_{t_1}, \ldots, M_{t_k}$ and computes the final sketch as $M_T = \bigcup_{i=1}^{k} M_{t_i}$. For overlapping windows, the system must maintain separate sketches for each window to avoid double-counting elements. The cost of this operation is independent of the raw data volume within the interval, enabling efficient, stateful stream processing \cite{Huang2016TowardHD}.
 
 The third pattern is a hierarchical, or tree-based, aggregation model, well-suited for systems with a natural data hierarchy \cite{Wilms2021TreebasedNA}. In this model, leaf nodes generate sketches from raw data streams. Intermediate nodes in the hierarchy periodically collect and merge the sketches from their children to create higher-level aggregates. The validity of this hierarchical model rests upon the associativity of the HLL union, which ensures that the final global sketch is identical regardless of the tree's depth or the order of intermediate merge operations. This pattern enables multi-resolution querying, where queries for cardinality at different levels of the hierarchy can be answered by accessing pre-aggregated sketches without reprocessing data from lower levels.
+
+\begin{remark}
+    In hierarchical aggregation, the relative error of the global estimate remains $O(1/\sqrt{m})$ independent of tree depth, as each merge produces a sketch equivalent to single-pass construction over the union of the underlying sets.
+\end{remark}
 
 % These three patterns instantiate the hierarchical aggregation architecture analyzed in the framework (\S~\ref{subsubsec:composability-hierarchy}). The framework establishes that composability-optimized structures enable parallel reduction through tree-based merge operations. The MapReduce pattern implements a two-level hierarchy (workers and reducers). The stream processing pattern implements temporal hierarchies (window aggregation). The tree-based pattern implements spatial hierarchies (organizational or geographical aggregation levels). All three patterns rely on the properties established in Theorem~\ref{thm:hll-union-properties} to guarantee correctness under arbitrary merge orderings.
 
@@ -166,15 +177,20 @@ In data-parallel frameworks, fault tolerance for stateless transformations is ac
 An alternative approach, termed approximate fault tolerance, leverages the inherently probabilistic nature of the data structure to create more efficient recovery mechanisms. Instead of checkpointing at fixed intervals, this model triggers a backup only when the potential error introduced by a failure would exceed a user-defined threshold. This is managed by monitoring the divergence between the current in-memory state and its last persisted backup \cite{Huang2016TowardHD}.
 
 \begin{definition}[State Divergence \cite{Huang2016TowardHD}]
-    Let $M_{current}$ be the current state of an HLL sketch and $M_{backup}$ be its most recent persisted state. The state divergence, $D(M_{current}, M_{backup})$, is a metric quantifying the difference between the two sketches.
+    Let $M_{cur}$ be the current state of an HLL sketch and $M_{back}$ be its most recent persisted state. The state divergence $D(M_{cur}, M_{back})$ quantifies the difference between the two sketches. For HLL, this can be defined as:
+    \begin{equation*}
+        D(M_{cur}, M_{back}) = |\text{Estimate}(M_{cur}) - \text{Estimate}(M_{back})|
+    \end{equation*}
+    or alternatively as the sum of register-wise differences:
+    \begin{equation*}
+        D(M_{cur}, M_{back}) = \sum_{j=0}^{m-1} |M_{cur}[j] - M_{back}[j]|
+    \end{equation*}
 \end{definition}
-
-The AF-Stream (Approximate Fault-Tolerant Stream) framework defines this divergence based on the specific properties of the streaming algorithm being used. For HLL, this can be modeled as a function of the differences between the register values.
 
 It executes a backup operation only when the state divergence $D$ exceeds a pre-configured threshold $\Theta$, or when the number of unprocessed items since the last backup exceeds another threshold $L$ \cite{Huang2016TowardHD}.
 
 \begin{proposition}[Bounded Error Under Failures \cite{Huang2016TowardHD}]
-    In the AF-Stream model, let a worker experience $k$ failures. The total divergence between the actual state and the ideal, failure-free state is bounded by a function of the user-specified thresholds $\Theta$ and $L$, and algorithm-specific constants. The error bound is independent of the number of failures $k$.
+    In the AF-Stream model, let a worker experience $k$ failures. The total accumulated divergence $D_{total}$ between the actual state and the ideal, failure-free state satisfies $D_{total} \leq k \cdot \max(\Theta, c \cdot L)$ where $\Theta$ and $L$ are the user-specified divergence and item count thresholds, and $c$ is an algorithm-specific constant. The bound grows linearly with $k$ but is controlled by the threshold parameters.
 \end{proposition}
 
 % This model demonstrates a principled trade-off, where a system accepts a small, provably bounded increase in estimation error in the rare event of a failure in exchange for a significant reduction in the constant overhead of checkpointing.
@@ -196,7 +212,7 @@ While HLL sketches provide a compact summary that does not store raw data elemen
 In a federated query system, an adversary who compromises the central aggregator or observes the transmitted sketches could perform linkage attacks. If a hospital finds that only one patient satisfies the criteria for a query, sharing an HLL sketch of this single-element set still reveals information. An attacker could potentially infer properties of this unique patient by correlating the sketch with a known background population \cite{Le2025ByzantineRF}. To quantify this risk, we can apply the concept of k-anonymity to the buckets of an HLL sketch.
 
 \begin{definition}[Bucket k-Anonymity \cite{Le2025ByzantineRF}]
-    Let $B$ be a set of elements matching a query, drawn from a background population $A$. An HLL bucket is defined to be k-anonymous if the value it contains could have been generated by at least $k$ distinct elements from the background population $A$. An attacker who observes the sketch cannot determine with certainty which of the $k$ elements contributed to that bucket's value.
+    Let $B$ be a set of elements matching a query, drawn from a background population $A$. Consider an HLL bucket $j$ containing value $M[j] = v$. This bucket is k-anonymous if $|\{x \in A : h(x) \bmod m = j \text{ and } \rho(x) = v\}| \geq k$, meaning at least $k$ distinct elements from $A$ could have produced this bucket value. An attacker observing the sketch cannot determine with certainty which of these $k$ elements contributed to the bucket's value.
 \end{definition}
 
 The level of k-anonymity provided by an HLL sketch is a function of the sketch parameters, the size of the background population, and the size of the query set. Research has shown that it is possible to compute theoretical bounds on the expected number of buckets in a sketch that are not k-anonymous. HLL sketches are particularly effective for rare diseases (where the ratio of query set size to background population size is low). This is in marked contrast to sharing exact counts, where a count of one immediately breaks anonymity \cite{Le2025ByzantineRF}. This allows us to manage the trade-off between the accuracy of the cardinality estimate, which increases with the number of buckets $m$, and the privacy risk, as a larger $m$ may decrease the expected k-anonymity of each bucket.
@@ -225,7 +241,7 @@ The HyperLogLogLog algorithm\footnote{Three log scientist \url{https://curiousco
 
     $S$ is a sparse associative array storing pairs $(j, M'[j])$ for outlier registers whose values fall outside the dense offset range. $S$ is a sparse associative array storing pairs $(j, M'[j])$ for outlier registers whose values fall outside the dense offset range.
 
-    The base value $B$ is chosen dynamically to minimize the total representation size $k \cdot m + |S| \cdot (\log m + \log w)$.
+    The base value $B$ is chosen dynamically to minimize the total representation size $k \cdot m + |S| \cdot (\log m + \log w)$; see \cite{Karppa2022HyperLogLogLogCE} for the selection algorithm.
 \end{definition}
 
 This structure adapts to the statistical distribution of register values, using compact offsets for the common case and a sparse map for exceptions. The resulting sketch requires approximately $m \log_2\log_2\log_2 m$ bits for large $n$, albeit with a potential increase in the computational complexity of updates \cite{Karppa2022HyperLogLogLogCE}.
