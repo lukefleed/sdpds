@@ -42,7 +42,7 @@ The HyperLogLog sketch satisfies the conditions  established in \ref{def:composa
 
 We sum up the core mechanics of the HyperLogLog algorithm as introduced by Flajolet et al. \cite{Flajolet2007HyperLogLogTA}. The algorithm maps elements to an array of registers and records an observable based on the bit patterns of their hash values.
 
-\begin{definition}[HyperLogLog Sketch]
+\begin{definition}[HyperLogLog Sketch] \label{def:hll-sketch}
     A HyperLogLog sketch consists of an array $M$ of $m=2^p$ registers, where $p$ is a precision parameter. The sketch is associated with a hash function $h: \mathcal{U} \to \{0,1\}^L$ that maps elements from a universe $\mathcal{U}$ to binary strings of sufficient length $L$. Each register $M[j]$ is initialized to 0.
 \end{definition}
 
