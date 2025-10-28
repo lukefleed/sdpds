@@ -2,7 +2,7 @@
 
 We consider the dictionary problem, which consists of maintaining a dynamic set $S \subseteq \mathcal{U}$ and supporting membership queries. This capability is a fundamental primitive for distributed protocols concerned with set reconciliation: the process of computing the symmetric difference between sets held on disparate nodes. In a large-scale distributed environment, classical deterministic solutions to the membership problem, such as hash tables, impose space requirements proportional to both the number of elements and their individual sizes. For $n$ elements of size $|x|$ bits, a hash table requires $\Theta(n \cdot |x|)$ space. When data is partitioned across nodes, the communication cost of synchronizing these structures scales with the same factor. For large objects or high-cardinality sets, this cost renders deterministic approaches infeasible in bandwidth-constrained systems \cite{Liu2014ParBFAP, Chang2006BigtableAD}.
 
-Probabilistic data structures resolve this constraint by trading a quantifiable measure of precision for substantial gains in space and communication efficiency. A Bloom filter, the canonical instance of this class, requires $\Theta(n \log(1/\varepsilon))$ space independent of element size, where $\varepsilon$ denotes the target false positive rate. This sub-linear space complexity enables the design of systems that prioritize performance and availability over strict consistency.
+Probabilistic data structures resolve this constraint by trading a quantifiable measure of precision for substantial gains in space and communication efficiency. A Bloom filter, the canonical instance of this class, requires $\Theta(n \log(1/\varepsilon))$ space independent of element size, where $\varepsilon$ denotes the target false positive rate. This space bound becomes advantageous for elements whose size significantly exceeds $\log(1/\varepsilon)$ bits, as the oracle occupies space comparable to or smaller than storing even one copy of the original elements in a lossless representation.
 % We establish the properties of probabilistic membership oracles and analyze the specific constraints that distributed deployment imposes on their design.
 
 \subsubsection{Membership Queries in Large-Scale Systems}
@@ -10,7 +10,7 @@ Probabilistic data structures resolve this constraint by trading a quantifiable 
 A one-sided error membership oracle guarantees correctness for negative answers. A definitive negative answer allows a system to avoid expensive, high-latency operations, such as disk I/O or network round-trips, which are often the primary bottlenecks to performance \cite{Tarkoma2012TheoryAP, Chang2006BigtableAD}. For instance, a storage system may consult such an oracle to determine if a specific data block might exist on a remote disk before initiating a costly read operation; a negative response obviates the need for any disk access \cite{Chang2006BigtableAD, Tarkoma2012TheoryAP}.
 
 \begin{definition}[One-Sided Error Membership Oracle]
-    A data structure $\mathcal{D}$ representing a set $S$ is a one-sided error membership oracle with a false positive rate $\varepsilon$ if for any element $x \in S$, the probability that $\mathcal{D}.\textsc{Query}(x)$ returns true is 1, and for any element $y \notin S$, the probability that $\mathcal{D}.\textsc{Query}(y)$ returns true is at most $\varepsilon$.
+    A data structure $\mathcal{D}$ representing a set $S$ is a one-sided error membership oracle with a false positive rate $\varepsilon$ if the following hold over the randomness in constructing $\mathcal{D}$ from $S$ and in processing queries: for any element $x \in S$, $\mathcal{D}.\textsc{Query}(x)$ returns true with probability 1, and for any element $y \notin S$, $\mathcal{D}.\textsc{Query}(y)$ returns true with probability at most $\varepsilon$.
 \end{definition}
 
 % By definition, the oracle never produces false negatives. The adoption of such a structure is not an ad-hoc optimization but a principled architectural strategy. It represents a deliberate trade-off where a system prioritizes lower latency over strict consistency.
@@ -21,7 +21,7 @@ By accepting a bounded and well-defined error probability, these algorithms enab
 The Bloom filter is the canonical implementation of a one-sided error membership oracle \cite{Bloom1970SpacetimeTI}. It achieves its space efficiency by storing compact representations of elements, derived from hash functions, rather than the elements themselves.
 
 \begin{definition}[Bloom Filter \cite{Bloom1970SpacetimeTI}]
-    A Bloom filter for a set $S$ with expected cardinality $|S| \leq n$ from a universe $\mathcal{U}$ consists of a bit array $B$ of length $m$ initialized to all zeros, and a collection of $k$ independent hash functions $\mathcal{H} = \{h_1, \ldots, h_k\}$, where each $h_i : \mathcal{U} \to \{0, 1, \ldots, m-1\}$.
+    A Bloom filter for a set $S$ with expected cardinality $|S| \leq n$ from a universe $\mathcal{U}$ consists of a bit array $B$ of length $m$ initialized to all zeros, and a collection of $k$ independent hash functions $\mathcal{H} = \{h_1, \ldots, h_k\}$, where each $h_i : \mathcal{U} \to \{0, 1, \ldots, m-1\}$. The hash functions are pairwise independent and map elements uniformly over the index range.
 \end{definition}
 
 To insert an element $x \in S$, we set the bits at positions $B[h_i(x)]$ to 1 for all $i \in \{1, \ldots, k\}$. To query for an element $y$, the operation returns true if and only if $B[h_i(y)] = 1$ for all $i \in \{1, \ldots, k\}$. A query for any element $y \in S$ is guaranteed to return true, as all corresponding bits will have been set during its insertion. This structure therefore satisfies the no-false-negatives condition of the oracle by construction.
@@ -54,7 +54,7 @@ The properties established above hold under two assumptions: the set $S$ is stat
 
 \subsection{The Constraint of State Synchronization} \label{subsec:bloom-limitations}
 
-In a distributed system where compute and storage are separated by network boundaries, a membership oracle must maintain coherence with a dataset that evolves through insertion and deletion operations across multiple partitions. This requirement for state synchronization introduces constraints not present in single-node deployments where the oracle and the data it represents are co-located. We identify two failure modes that emerge when a membership oracle cannot adapt its internal state to reflect changes in the underlying dataset.
+In a distributed system where compute and storage are separated by network boundaries, a membership oracle must maintain coherence with a dataset that evolves through insertion and deletion operations across multiple partitions. This requirement for state synchronization introduces constraints not present in single-node deployments where the oracle and the data it represents are co-located. An oracle that fails to synchronize with the dataset violates a key property: for all times $t > t_{\text{delete}}$ where element $x$ is deleted at time $t_{\text{delete}}$, the oracle must satisfy $P(\mathcal{D}.\textsc{Query}(x) = \text{true}) \leq \varepsilon$. We identify two failure modes that manifest when a membership oracle cannot adapt its internal state to reflect changes in the underlying dataset.
 
 The first failure mode is the persistence of stale positives. When an element is deleted from the dataset, a Bloom filter that represents that dataset cannot remove the element's contribution from its bit array. The bits set during the element's insertion remain set indefinitely. Subsequent queries for the deleted element will continue to return true. In a distributed key-value store that uses Bloom filters to avoid disk I/O for non-existent keys, this behavior forces the system to perform expensive read operations merely to discover that the key has been deleted or that a tombstone marker is present. The filter fails to converge to the true state of the system. The cost of this divergence is proportional to the delete rate of the workload; systems with high churn experience continuous wasted I/O as filters accumulate obsolete positive indications \cite{Mosharraf2021ImprovingLA, Tarkoma2012TheoryAP}.
 
@@ -87,7 +87,15 @@ The analysis in \ref{subsec:bloom-limitations} exposes a fundamental requirement
 A membership oracle suitable for distributed deployment must satisfy three conditions: it must support element deletion in constant time, it must not require auxiliary data structures whose space overhead negates the oracle's compactness, and it must not introduce false negatives for elements that remain in the set. We define this requirement as the property of dynamic mutability.
 
 \begin{definition}[Dynamic Mutability] \label{def:mutability}
-    A probabilistic oracle $\mathcal{D}$ representing a set $S$ exhibits dynamic mutability if it supports both $\textsc{Insert}(x)$ and $\textsc{Delete}(x)$ operations for an element $x$ in $O(1)$ time. The space complexity must increase by at most a constant multiplicative factor compared to a static probabilistic oracle with the same target false positive rate and expected capacity. The $\textsc{Delete}(x)$ operation must not introduce false negatives for any other element $y \in S, y \neq x$.
+    Let $S_t$ denote the set of elements for which $\textsc{Insert}$ has been called but $\textsc{Delete}$ has not been subsequently called at time $t$. A probabilistic oracle $\mathcal{D}$ exhibits dynamic mutability if it satisfies the following:
+
+    (1) $\textsc{Insert}(x)$ and $\textsc{Delete}(x)$ execute in $O(1)$ time.
+
+    (2) Space complexity is $O(|S_t| \log(1/\varepsilon))$ for a target false positive rate $\varepsilon$, where the bound holds as a function of the current cardinality.
+
+    (3) For all $y \in S_t$, we have $P(\mathcal{D}.\textsc{Query}(y) = \text{true}) = 1$ (no false negatives for elements currently in the set).
+
+    (4) The operation $\textsc{Delete}(x)$ removes the contribution of $x$ such that subsequent queries for any $y \neq x$ with $y \in S_t$ are unaffected. If $\textsc{Delete}(x)$ is called when $x \notin S_t$, the operation is a no-op.
 \end{definition}
 
 This property represent a requirement for oracles that must track the lifecycle of data in systems where deletion is a first-class operation. Distributed key-value stores that implement tombstones for deleted keys, Log-Structured Merge-Trees that compact data files and purge obsolete entries, and content distribution networks that expire cached objects all require membership oracles whose internal state can synchronize with these deletion events. The property of dynamic mutability characterizes the class of oracles that satisfy this requirement.
@@ -103,12 +111,13 @@ The main challenge in deploying Cuckoo Filters across network boundaries lies in
 The solution is partial-key cuckoo hashing, which enables relocation decisions using only the stored fingerprint. This capability is the prerequisite for all subsequent distributed patterns.
 
 \begin{definition}[Partial-Key Cuckoo Hashing \cite{Fan2014CuckooFP}]
-    For an element $x \in \mathcal{U}$ with precomputed fingerprint $f = \textsc{fingerprint}(x)$, the two candidate bucket indices are computed as:
+    For an element $x \in \mathcal{U}$, let $f = \textsc{fingerprint}(x)$ denote a compact bit string representation of $x$. Let $\textsc{hash}: \mathcal{U} \to \{0, 1, \ldots, m-1\}$ denote a hash function mapping elements to bucket indices, and let $\textsc{hash}_f: \{0,1\}^* \to \{0, 1, \ldots, m-1\}$ denote a hash function on bit strings (fingerprints) to bucket indices. The two candidate bucket indices are computed as:
     \begin{equation*}
-        i_1 = \textsc{hash}(x), \quad i_2 = i_1 \oplus \textsc{hash}(f)
+        i_1 = \textsc{hash}(x), \quad i_2 = i_1 \oplus \textsc{hash}_f(f)
     \end{equation*}
-    where $\oplus$ denotes bitwise XOR. This allows us to, given $i_2$ and $f$, recover $i_1$ via the same equation:
-    $$i_1 = i_2 \oplus \textsc{hash}(f)$$
+    where $\oplus$ denotes bitwise XOR. This allows recovery of $i_1$ given $i_2$ and $f$ via the same equation:
+    $$i_1 = i_2 \oplus \textsc{hash}_f(f)$$
+    This symmetry decouples relocation from full-key access, enabling fingerprints to traverse network boundaries without requiring access to the original element.
 \end{definition}
 
 This symmetry decouples relocation from full-key access. When a fingerprint must be moved from bucket $i_1$ to its alternate location, the system computes the destination using only $f$ and the current position. The fingerprint can traverse network boundaries, be temporarily replicated on different nodes, or be moved as part of partition rebalancing, all without requiring access to the original element. For distributed systems where filters may be stored separately from data, or where data undergoes continuous replication and migration, this property is essential.
@@ -118,9 +127,13 @@ This symmetry decouples relocation from full-key access. When a fingerprint must
 
     \emph{Lookup}$(x)$: Compute $i_1 = \textsc{hash}(x)$, $i_2 = i_1 \oplus \textsc{hash}(f)$. Return true if fingerprint $f$ exists in either bucket $i_1$ or $i_2$; otherwise return false. Query always examines at most $2b$ entries.
 
-    \emph{Insert}$(x)$: Compute $i_1, i_2$. If either bucket contains an empty entry, place $f$ there and complete. Otherwise, select one bucket randomly, displace its resident fingerprint $f'$, compute the alternate location for $f'$ using $i \gets i \oplus \textsc{hash}(f')$, and repeat the displacement process. If relocations exceed a configurable threshold (typically 500), insertion fails and a capacity increase is required.
+    \emph{Insert}$(x)$: Compute $i_1, i_2$. If either bucket contains an empty entry, place $f$ there and complete. Otherwise, select one bucket randomly, displace its resident fingerprint $f'$, compute the alternate location for $f'$ using $i \gets i \oplus \textsc{hash}(f')$, and repeat the displacement process. If relocations exceed a configurable threshold (typically 500 to 1000, chosen to balance insertion success probability and latency), insertion fails and a capacity increase is required.
 
-    \emph{Delete}$(x)$: Compute $i_1, i_2$. If $f$ exists in either bucket, remove one copy; otherwise return failure. Deletion requires no counters or additional bookkeeping.
+    \emph{Delete}$(x)$: Compute $i_1, i_2$. If $f$ exists in either bucket, remove one copy; otherwise return failure. Deletion executes in constant time.
+
+    \begin{remark}
+        If two distinct elements $x$ and $y$ produce the same fingerprint $f$ and share a candidate bucket, deleting $x$ may erroneously remove the representation of $y$, introducing a false negative for $y$. This occurs with probability $O(1/2^f)$, which is typically negligible for fingerprints of sufficient bit length. The fingerprint size $f$ must be chosen such that $2^f \gg 1/\varepsilon$, where $\varepsilon$ is the target false positive rate.
+    \end{remark}
 \end{definition}
 
 A false positive here occurs when an element not in the set hashes to a fingerprint that collides with an existing fingerprint in one of its two candidate buckets. A query inspects at most $2b$ entries across two buckets. This inspection process yields a direct upper bound on the false positive probability.
@@ -177,7 +190,7 @@ The core property of the I2CF is that bucket identifiers depend only on the elem
 This design decouples capacity growth from query complexity, resolving the conflict present in the DCF (\ref{def:dynamic-cuckoo})
 
 \begin{theorem}[I2CF Query Complexity]
-    For an I2CF with $m$ buckets organized on a consistent hash ring, a membership query for an element $x$ requires a sequence of constant-time operations: (1) hash computations to determine ring positions, (2) a ring lookup to identify candidate buckets (achievable in $O(1)$ expected time with an appropriate auxiliary index), and (3) inspection of entries within those buckets. The total query complexity is therefore $O(1)$, independent of the total number of items $n$ and the total number of buckets $m$.
+    For an I2CF with $m$ buckets organized on a consistent hash ring maintained as a hash table indexed by ring positions, a membership query for an element $x$ executes the following: (1) hash computations to determine ring positions in $O(1)$ time, (2) a hash table lookup to identify candidate buckets in $O(1)$ expected time, (3) inspection of at most $2b$ entries within the two candidate buckets. The total query complexity is therefore $O(1)$ in expectation, independent of the total number of items $n$ and the total number of buckets $m$. The auxiliary index incurs $O(m)$ space overhead, which is proportional to the number of buckets.
 \end{theorem}
 
 We saw that the DCF modifies the element-to-filter mapping to accommodate growth, leading to performance degradation. In contrast, the I2CF maintains a fixed, deterministic mapping from elements to ring positions while allowing the set of buckets to expand elastically. As a result, growth and query performance become orthogonal concerns.
@@ -198,11 +211,11 @@ The ability to execute deletion locally permits the stable assignment of filter 
 We can model the expected query latency for this architecture under a uniform query distribution. In a system with $m$ nodes, a randomly routed query has a probability $1/m$ of being processed locally and a probability $(1 - 1/m)$ of requiring network transit. This leads to the following formulation for the expected query latency.
 
 \begin{theorem}[Co-Partitioned Query Latency] \label{thm:co-partitioned-latency}
-    In a co-partitioned I2CF architecture of $m$ nodes under a uniform query distribution, the expected query latency $\mathbb{E}[L_q]$ is given by:
+    In a co-partitioned I2CF architecture of $m$ nodes, assume that (1) queries are uniformly distributed over the keyspace, (2) network latency is constant at $t_{\text{network}}$, and (3) local memory access time is constant at $t_{\text{local}}$. Under these assumptions, the expected query latency $\mathbb{E}[L_q]$ is given by:
     \begin{equation*}
         \mathbb{E}[L_q] = \frac{1}{m} t_{\text{local}} + \left(1 - \frac{1}{m}\right) t_{\text{network}}
     \end{equation*}
-    where $t_{\text{local}}$ represents local bucket access time and $t_{\text{network}}$ represents network round-trip latency.
+    where $t_{\text{local}}$ represents local bucket access time and $t_{\text{network}}$ represents network round-trip latency. This latency bound is independent of the total dataset size $n$.
 \end{theorem}
 
 This latency bound is independent of the total dataset size $n$. Query performance is determined by hardware characteristics and system scale ($m$), not by the number of elements stored.
@@ -224,11 +237,11 @@ To address this class of workloads, we analyze the Consistent Cuckoo Filter (CCF
 This architecture allows the system to increase its total capacity instantly by adding a new, untapped I2CF. However, this \emph{scale-out} mechanism, if left unmanaged, structurally resembles the chaining model of the DCF (\ref{def:dynamic-cuckoo}). A query must probe every instance in the collection, leading to a performance dependency on the number of instances, $s$.
 
 \begin{proposition}[CCF Unmanaged Query Complexity]
-    In a CCF where new, fixed-capacity I2CF instances are added sequentially without any consolidation, the number of instances $s$ grows linearly with the total number of items $n$. The worst-case query complexity is therefore $O(s)$, which is equivalent to $O(n)$.
+    In a CCF where new, fixed-capacity I2CF instances of constant capacity $C$ are added sequentially without consolidation, the number of instances $s$ grows linearly with the total number of items $n$. Specifically, $s = \lceil n/C \rceil$, which gives $s = \Theta(n)$ as $n \to \infty$ when $C$ is held constant. Since a query must probe every instance in the collection in the worst case, the worst-case query complexity is therefore $O(s) = O(n)$.
 \end{proposition}
 
 \begin{proof}
-    Let $n$ be the total number of items and let each I2CF instance have an effective capacity of $C$ items (e.g., $C = m \cdot b \cdot \alpha$, where $m$ is the number of buckets, $b$ is the entries per bucket, and $\alpha$ is the target load factor). In an unmanaged growth model, a new instance is added every time the system has stored an additional $C$ items. The number of instances $s$ required to store $n$ items is therefore $s = \lceil n/C \rceil$. As $n \to \infty$, this gives $s = \Theta(n)$. Since a query must inspect all $s$ instances in the worst case, the query complexity is $O(s) = O(n)$.
+    Let $n$ be the total number of items and let each I2CF instance have an effective capacity of $C$ items held constant (e.g., $C = m \cdot b \cdot \alpha$, where $m$ is the number of buckets, $b$ is the entries per bucket, and $\alpha$ is the target load factor). In an unmanaged growth model with fixed per-instance capacity, a new instance is added every time the system has stored an additional $C$ items. The number of instances $s$ required to store $n$ items is therefore $s = \lceil n/C \rceil$. As $n \to \infty$, this gives $s = \Theta(n)$. Since a query must inspect all $s$ instances in the worst case, the query complexity is $O(s) = O(n)$.
 \end{proof}
 
 The CCF architecture as defined by Luo et al. explicitly includes management policies to prevent this linear degradation \cite{Luo2021ACC}. It is not merely a chain of filters but a managed system that provides hierarchical scaling. This system operates at two granularities. The first is a fine-grained, bucket-level elasticity, where capacity adjustments occur within each constituent I2CF by adding or removing buckets from its consistent hash ring. The second is a coarse-grained, filter-level elasticity, which accommodates sudden load spikes by adding entire new I2CF instances. To control the growth of query latency, the architecture incorporates a consolidation mechanism, which periodically merges under-utilized instances to reduce the total number of instances, $s$. This hierarchical approach allows the system to manage capacity at multiple granularities, handling gradual growth through the fine-grained mechanism and absorbing sudden traffic spikes by adding new instances, while maintaining long-term performance through background consolidation.
@@ -242,7 +255,7 @@ We analyze three distinct concurrency control strategies, each designed to resol
 The first strategy, optimistic concurrency, is designed for read-dominant workloads, such as those found in caching systems. Fan et al. developed this model for the MemC3 system \cite{Fan2013MemC3CA}. The model serializes write operations while allowing multiple readers to proceed without locks, using version counters for synchronization. A key component of this model is the execution order of relocations along a displacement chain. After identifying a valid path, the system moves the last element in the chain into the empty slot first, which frees a new slot. The second-to-last element is then moved into this newly vacated slot. This reverse-order execution ensures that every element being relocated remains accessible in at least one of its two candidate buckets at all times.
 
 \begin{definition}[Optimistic Cuckoo Hashing \cite{Fan2013MemC3CA}]
-    A writer maintains a version counter for each bucket. Before initiating relocations, it identifies a valid displacement path (e.g., $a \to b \to c \to \text{empty}$) without acquiring locks. The relocations are then executed in reverse order, with each move incrementing the version counter of the involved bucket. A reader records the versions of its two candidate buckets before inspection and re-checks them afterward. If any version has changed, the reader discards its result and retries the operation.
+    A writer maintains a version counter for each bucket. Before initiating relocations, it identifies a valid displacement path (e.g., $a \to b \to c \to \text{empty}$) without acquiring locks. The relocations are then executed in reverse order along the path: the element in the bucket preceding the empty slot is moved first, then the element preceding that, and so on until all elements have been relocated. Each move increments the version counter of the involved bucket. This reverse-order execution ensures that every element being relocated remains accessible in at least one of its two candidate buckets at all times. Specifically, if element $a$ is moved from bucket $B_1$ to bucket $B_2$, it is only after bucket $B_2$ has been vacated by moving its resident element to its alternate location, so when $a$ enters $B_2$, a reader examining either $B_1$ or $B_2$ will find $a$ before or after the move. A reader records the versions of its two candidate buckets before inspection and re-checks them afterward. If any version has changed, the reader discards its result and retries the operation.
 \end{definition}
 
 This strategy is highly effective for workloads where the read-to-write ratio is high, as readers do not incur lock acquisition overhead.
@@ -270,7 +283,7 @@ The key difference emerges in deletion scenarios, a problem central to systems t
 A Bloom filter behaves differently. Since it cannot remove the element, it will continue to return positive for the deleted key indefinitely. This forces the system to perform expensive validation lookups against the backing data store merely to discover a tombstone, negating much of the filter's performance benefit in workloads with frequent deletions \cite{Mosharraf2021ImprovingLA}.
 
 \begin{proposition}[Cuckoo Filter Replication Convergence]
-    In an eventually consistent system with replicated Cuckoo Filters, let an element $x$ be inserted at time $t_i$ and deleted at time $t_d > t_i$. For any replica $r$, there exist propagation delays such that the insertion is applied at time $\tau_i \geq t_i$ and the deletion is applied at time $\tau_d \geq t_d$. For all times $t > \tau_d$, a query for $x$ on replica $r$ will deterministically return false. In contrast, a standard Bloom filter provides no upper bound on the time until a query for a deleted element ceases to return a positive result.
+    In an eventually consistent system with replicated Cuckoo Filters, let an element $x$ be inserted at time $t_i$ and deleted at time $t_d > t_i$. For any replica $r$, let the insertion be applied at time $\tau_i \geq t_i$ and the deletion be applied at time $\tau_d \geq t_d$. For all times $t > \tau_d$, we have $P(\mathcal{D}.\textsc{Query}(x) = \text{true}) = 0$ on replica $r$, since the deletion operation deterministically removes the fingerprint of $x$ from both candidate buckets. In contrast, a standard Bloom filter provides no mechanism to remove bits set during insertion, so it will continue to return a positive result for a deleted element indefinitely.
 \end{proposition}
 
 This property enables Cuckoo Filters to converge more rapidly to the true state of the system, especially in environments with frequent deletions. For distributed systems implementing eventual consistency, this allows the filter's state to accurately track operations such as the purging of tombstones during compaction or garbage collection. The ability to remove fingerprints, rather than merely marking them for future cleanup, ensures that the filter remains a reliable oracle for the live, non-deleted state of the dataset.
@@ -339,7 +352,7 @@ The protocol deliberately utilizes filters with a high individual false positive
 
 The protocol addresses temporal inconsistency through probabilistic convergence but does not provide dynamic mutability. The underlying Bloom filters cannot delete elements; once an element is inserted during a synchronization round, it remains in the local filter indefinitely. If an element is deleted from the true dataset on some node, the protocol has no mechanism to propagate this deletion to peer filters.
 
-The protocol also does not provide composability in the sense that we will define in ~\ref{def:composability}. While the protocol uses bitwise OR operations to combine filters during synchronization rounds, the use of unique hash functions for each node pair means that filters constructed on different nodes are not directly mergeable. Two filters representing the same set but constructed with different hash seeds cannot be combined through a bitwise OR to produce a valid filter for the union. The protocol achieves eventual consistency through iterative pairwise reconciliation, not through a single, order-independent merge operation.
+The protocol also does not provide composability in the sense that will be formalized in Section \ref{sec:cardinality}. In that context, composability refers to the ability to merge two oracles constructed from different data partitions through a single, order-independent operation such that the merged oracle is equivalent to one constructed from the combined dataset. The DBF protocol does not satisfy this property because filters constructed with different node-specific hash seeds cannot be combined through a bitwise OR operation to produce a valid merged filter. Instead, the protocol achieves eventual consistency through iterative pairwise reconciliation, where each interaction uses node-specific hash functions.
 
 % The DBF protocol represents an architectural solution to the temporal inconsistency problem in replicated Bloom filters. It provides probabilistic guarantees about convergence rates and system-wide error bounds. However, it operates within the constraints of the underlying data structure: filters that cannot delete elements and that require coordination-specific hash functions for each interaction.
 
