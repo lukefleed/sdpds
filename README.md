@@ -4,3 +4,5 @@
 [![Build LaTeX](https://github.com/lukefleed/sdpds/actions/workflows/latex.yml/badge.svg?branch=master)](https://github.com/lukefleed/sdpds/actions/workflows/latex.yml)
 
 This repository contains the LaTeX source code for the survey "A Framework for Probabilistic Oracles in Distributed Systems". _Still a work in progress_.
+
+You can find the compiled PDF here: [survey.pdf](https://lukefleed.github.io/sdpds/survey.pdf)
