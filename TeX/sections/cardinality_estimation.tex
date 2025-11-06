@@ -32,8 +32,6 @@ Idempotency ensures that re-combining a duplicate oracle does not alter the aggr
 
 Collectively, these properties enable the non-additive \texttt{COUNT(DISTINCT)} problem to be reframed as a decomposable aggregation problem, analogous to a \texttt{SUM} operation. The communication cost of distributed cardinality estimation becomes proportional to the size of the compact oracle representation, not to the dataset cardinality.
 
-% Distributed SQL engines that execute \texttt{GROUP BY} queries with cardinality aggregation, stream processing systems that compute distinct counts over windowed data, and real-time analytics platforms that maintain cardinality estimates across organizational hierarchies all require cardinality estimation oracles whose internal state can be combined through the operation specified in \ref{def:composability}. We now examine the realization of this property in the HyperLogLog sketch.
-
 \subsection{HyperLogLog} \label{subsec:hyperloglog}
 
 The HyperLogLog sketch satisfies the conditions  established in \ref{def:composability}. Its union operation executes as a register-wise maximum, requiring time proportional only to the number of registers $m$, independent of dataset cardinality. This operation is commutative, associative, and idempotent. The property derives from the design of the sketch as a fixed-size summary that encodes cardinality information through the maximum observable in each of $m$ independent stochastic experiments.

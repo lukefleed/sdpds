@@ -7,10 +7,6 @@
 *.synctex.gz
 *.nav
 *.snm
-fact_check_*
-.clinerules
 *.bbl
 *.blg
 papers/
-library.bib
-paper.xml

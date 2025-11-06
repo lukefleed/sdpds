@@ -98,7 +98,7 @@ Under a crash-stop failure model, consider a reduction tree with $k$ leaf nodes 
 
 The hierarchical aggregation architecture for cardinality estimation (\S\ref{subsubsec:hll-patterns}) instantiates this pattern class. Worker nodes construct HyperLogLog sketches over local data partitions. Intermediate aggregators merge sketches using the register-wise maximum operation. Theorem~\ref{thm:hll-union-properties} establishes that this operation is commutative, associative, and idempotent. Communication cost is $\Theta(ks)$ for $k$ worker nodes transmitting sketches of size $s$, independent of dataset cardinality $n$. This fixed-cost property transforms cardinality estimation from a communication-bound problem to a computation-bound problem.
 
-A hierarchical-reduction pattern produces correct global aggregates if and only if the oracle satisfies Definition~\ref{def:composability}. The HyperLogLog analysis in \S\ref{subsec:hyperloglog} shows that the union of partial sketches is equivalent to a sketch constructed over the complete dataset. Without commutativity and associativity, the result depends on merge order. Without idempotency, duplicate transmissions corrupt the aggregate.
+A hierarchical-reduction pattern produces correct global aggregates if and only if the oracle satisfies Definition \ref{def:composability}. The HyperLogLog analysis in \S\ref{subsec:hyperloglog} shows that the union of partial sketches is equivalent to a sketch constructed over the complete dataset. Without commutativity and associativity, the result depends on merge order. Without idempotency, duplicate transmissions corrupt the aggregate.
 
 \subsection{Structure Selection Criteria}
 \label{subsec:decision-framework}
