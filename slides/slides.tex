@@ -1,0 +1,637 @@
+\documentclass{beamer}
+\usepackage{bbm}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{array}
+\usepackage{graphicx}
+\usepackage{capt-of}
+\usetheme{Madrid}
+
+% Title page details:
+\title{A Framework for Probabilistic Oracles in Distributed Systems}
+\subtitle{A survey}
+\author{Luca Lombardo}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{frame}{The Impedance Mismatch}
+
+    \begin{block}{Disaggregated Architecture}
+        Compute workers: stateless, ephemeral. Storage servers: network-separated. Network latency $t_{\text{network}} \gg t_{\text{local}}$ dominates operation cost.
+    \end{block}
+
+
+    \textbf{Problem:} State-dependent computation requires querying remote state. Every validation query incurs network round-trip.
+
+
+    \begin{block}{Critical Operations}
+        \begin{itemize}
+            \item \textbf{Membership Testing:} Given remote $S \subseteq \mathcal{U}$, determine $x \in S$. Cost: one round-trip per query.
+
+            \item \textbf{Cardinality Estimation:} Compute $|S|$ for partitioned dataset. Exact \texttt{COUNT(DISTINCT)} requires shuffle of all unique elements. Cost: $\Theta(n \cdot |x|)$.
+        \end{itemize}
+    \end{block}
+
+\end{frame}
+
+\begin{frame}{Requirements for Compact Summaries}
+
+    Resolving the impedance mismatch requires compact summaries satisfying:
+
+    \begin{enumerate}
+        \item \textbf{Local Queryability:} Queryable locally or transmitted
+              with fixed cost independent of dataset size
+        \item \textbf{State Synchronization:} Synchronize with datasets
+              undergoing insertion \emph{and deletion}
+        \item \textbf{Order-Independent Merge:} Support merge operations
+              producing results identical to single-pass processing
+    \end{enumerate}
+
+
+    \begin{block}{Two Properties Addressing These Conditions}
+        \textbf{Dynamic Mutability} $\to$ Condition 2 \\
+        \textbf{Composability} $\to$ Condition 3
+    \end{block}
+
+    These properties impose conflicting requirements on state representation.
+
+\end{frame}
+
+\section{Set Membership}
+
+\begin{frame}{The Dictionary Problem}
+
+    \begin{definition}[One-Sided Error Membership Oracle]
+        A data structure $\mathcal{D}$ representing set $S$ is a one-sided error membership oracle with false positive rate $\varepsilon$ if:
+        \begin{itemize}
+            \item For any $x \in S$: $P(\mathcal{D}.\textsc{Query}(x) = \text{true}) = 1$
+            \item For any $y \notin S$: $P(\mathcal{D}.\textsc{Query}(y) = \text{true}) \leq \varepsilon$
+        \end{itemize}
+    \end{definition}
+
+    \vspace{0.5em}
+
+    \textbf{Space Complexity:}
+    Deterministic solutions (hash tables) require $\Theta(n \cdot |x|)$ space.
+    Probabilistic solutions require $\Theta(n \log(1/\varepsilon))$ space, independent of element size.
+
+    \vspace{0.5em}
+
+    \begin{theorem}[Bloom Filter Space-Error Relationship]
+        To achieve false positive rate $\varepsilon$, a Bloom filter requires $m/n = -\frac{\ln \varepsilon}{(\ln 2)^2} \approx 1.44 \log_2(1/\varepsilon)$ bits per element.
+    \end{theorem}
+
+\end{frame}
+
+
+\begin{frame}{Violated Assumptions in Distributed Systems}
+
+    Standard Bloom filter construction assumes:
+    \begin{enumerate}
+        \item Set $S$ is static after construction
+        \item Cardinality $|S| = n$ is known at initialization
+    \end{enumerate}
+
+    \vspace{0.8em}
+
+    \textbf{Reality in Disaggregated Systems:}
+
+    Datasets undergo continuous insertion and deletion across partitions. Cardinality is neither fixed nor predictable.
+
+    \vspace{0.8em}
+
+    \begin{block}{State Synchronization Constraint}
+        An oracle must maintain coherence with dataset evolution. For all times $t > t_{\text{delete}}$ where element $x$ is deleted at time $t_{\text{delete}}$:
+        $$P(\mathcal{D}.\textsc{Query}(x) = \text{true}) \leq \varepsilon$$
+    \end{block}
+
+    Standard Bloom filters cannot satisfy this constraint.
+
+\end{frame}
+
+\begin{frame}{Failure Modes}
+
+    \begin{block}{Stale Positives}
+        Element $x$ deleted from dataset. Bloom filter cannot remove $x$'s contribution. Bits remain set indefinitely.
+
+        Consequence: Queries for deleted $x$ return true. System performs wasted I/O to discover absence. Cost scales with deletion rate.
+    \end{block}
+
+    \vspace{1em}
+
+    \begin{block}{Capacity Exhaustion}
+        Filter parameterized for cardinality $n$. When $|S| \gg n$, bit array saturates.
+
+        False positive rate degrades: $\varepsilon \to 1$.
+
+        Resolution requires over-provisioning or reconstruction with service interruption.
+    \end{block}
+
+\end{frame}
+
+\begin{frame}{Bloom Filter Variants: Addressing Individual Constraints}
+
+    \begin{definition}[Counting Bloom Filter]
+        Replace bit array with array $C$ of $m$ counters, each of $c$ bits. Insertion increments counters at $h_i(x)$ for $i \in \{1,\ldots,k\}$. Deletion decrements counters. Query returns true if all counters positive.
+    \end{definition}
+
+    \textbf{Properties:} Enables deletion without false negatives. Space overhead: $\approx 4\times$ standard Bloom filter for $c=4$ bits per counter.
+
+    \begin{definition}[Scalable Bloom Filter]
+        Ordered sequence of Bloom filters $B_1, B_2, \ldots, B_s$ with increasing sizes $m_i > m_{i-1}$ and decreasing error rates $\varepsilon_i < \varepsilon_{i-1}$. New filter appended when active filter reaches load threshold.
+    \end{definition}
+
+    \textbf{Properties:} Accommodates unbounded growth. Heterogeneous parameters prevent bitwise union: two SBF instances cannot be merged.
+
+\end{frame}
+
+\begin{frame}{Distributed Bloom Patterns}
+
+    \begin{definition}[Parallel Partitioned Bloom Filter]
+        Sequence of $s$ homogeneous Bloom filters $B_1, \ldots, B_s$. Each filter has identical size $m$ and uses same $k$ hash functions. Union of two ParBF instances computed via bitwise OR of corresponding sub-filters.
+    \end{definition}
+
+    \textbf{Properties:} Bitwise OR is commutative, associative, idempotent
+    (enables order-independent merge). No deletion support.
+
+    % \pause
+    \begin{definition}[Distributed Bloom Filter Protocol]
+        Each node pair $(n_i, n_j)$ uses unique hash family $\mathcal{H}_{ij}$ derived from seed $s_{ij} = ID_i \oplus ID_j$. System-wide false positive rate: $\varepsilon_{\text{System}} \leq \varepsilon^{N-1}$ for $N$ nodes.
+    \end{definition}
+
+    \textbf{Properties:} Probabilistic convergence through iterative reconciliation. Filters with different seeds cannot be merged via bitwise OR (no composability). No deletion support.
+
+\end{frame}
+
+\begin{frame}{The Gap in Existing Solutions}
+
+    \textbf{Observation:} No Bloom filter variant satisfies both requirements.
+
+    \begin{itemize}
+        \item CBF: deletion support, but $4\times$ space overhead
+        \item SBF: capacity scaling, but no composability
+        \item ParBF: composability, but no deletion support
+        \item DBF: eventual convergence, but no composability or deletion
+    \end{itemize}
+
+    \begin{definition}[Dynamic Mutability]
+        A probabilistic oracle $\mathcal{D}$ exhibits dynamic mutability if:
+        \begin{enumerate}
+            \item $\textsc{Insert}(x)$ and $\textsc{Delete}(x)$ execute in $O(1)$ time
+            \item Space complexity $O(|S_t| \log(1/\varepsilon))$ for current cardinality $|S_t|$
+            \item For all $y \in S_t$: $P(\mathcal{D}.\textsc{Query}(y) = \text{true}) = 1$
+            \item $\textsc{Delete}(x)$ removes $x$'s without affecting queries for $y \neq x$
+        \end{enumerate}
+    \end{definition}
+
+\end{frame}
+
+\begin{frame}{Cuckoo Filter: Structure}
+
+    \begin{definition}[Cuckoo Filter]
+        A Cuckoo Filter consists of $m$ buckets, each containing $b$ entries. Each entry stores a fingerprint $f = \textsc{fingerprint}(x)$ of $f$ bits derived from element $x \in \mathcal{U}$.
+    \end{definition}
+
+    \begin{definition}[Partial-Key Cuckoo Hashing]
+        For element $x \in \mathcal{U}$, let $f = \textsc{fingerprint}(x)$ denote a compact bit string representation. Two candidate bucket indices are computed as:
+        $$i_1 = \textsc{hash}(x), \quad i_2 = i_1 \oplus \textsc{hash}_f(f)$$
+        where $\oplus$ denotes bitwise XOR.
+    \end{definition}
+
+    \textbf{Key Property:} XOR symmetry enables recovery of $i_1$ given $i_2$ and $f$:
+    $$i_1 = i_2 \oplus \textsc{hash}_f(f)$$
+
+    Relocation requires only fingerprint $f$, not original element $x$.
+
+\end{frame}
+
+\begin{frame}{Cuckoo Filter: Operations and Guarantees}
+
+    \begin{block}{Operations}
+        \begin{itemize}
+            \item \textsc{Lookup}$(x)$: Compute $i_1, i_2$ and check if fingerprint $f$ exists in either bucket. Examines at most $2b$ entries.
+            \item \textsc{Delete}$(x)$: Compute candidate buckets $i_1, i_2$. If $f$ exists in either bucket, remove one copy. Executes in $O(1)$ time without auxiliary counters.
+        \end{itemize}
+    \end{block}
+
+    \begin{theorem}[False Positive Bound]
+        A Cuckoo Filter with $b$ entries per bucket and fingerprint length $f$ bits satisfies:
+        $$\varepsilon \leq \frac{2b}{2^f}$$
+    \end{theorem}
+
+    \textbf{Space Complexity:} $O(n \cdot f)$ bits for $n$ elements, where fingerprint size $f \geq \lceil \log_2(1/\varepsilon) + \log_2(2b) \rceil$ bits.
+
+\end{frame}
+
+\begin{frame}{Capacity Scaling}
+
+    \begin{definition}[Dynamic Cuckoo Filter]
+        Ordered sequence of Cuckoo Filters $\text{CF}_1, \text{CF}_2, \ldots, \text{CF}_k$. Insertions directed to terminal filter. New filter appended when active filter reaches capacity.
+    \end{definition}
+
+    Query traverses sequence until fingerprint found. For $n$ items with per-filter capacity $C$, sequence length $k = \Theta(n/C)$. Query complexity $O(k) = O(n)$.
+
+    \begin{definition}[Index-Independent Cuckoo Filter]
+        Buckets maintained on consistent hash ring. Candidate locations determined by hashing element to ring positions. Bucket identifiers depend only on element hash value, not on total system size.
+    \end{definition}
+
+    Query complexity $O(1)$ independent of dataset size $n$ and bucket count $m$.
+
+\end{frame}
+
+\begin{frame}{Co-Partitioned Architecture}
+
+    \begin{definition}[Co-Partitioned Filter]
+        System of $m$ nodes with consistent hash ring. Node $n_i$ maintains:
+        \begin{itemize}
+            \item Data items $d$ where $H(d) \in [t_i, t_{i+1})$
+            \item Filter buckets $b$ where $\text{position}(b) \in [t_i, t_{i+1})$
+        \end{itemize}
+        Query for element $x$ routed to node responsible for $H(x)$.
+    \end{definition}
+
+    \begin{theorem}[Co-Partitioned Query Latency]
+        Under uniform query distribution:
+        $$\mathbb{E}[L_q] = \frac{1}{m} t_{\text{local}} + \left(1 - \frac{1}{m}\right) t_{\text{network}}$$
+        % independent of dataset size $n$.
+    \end{theorem}
+
+    Filter partitioning aligned with data partitioning enables local execution. Query performance determined by system scale $m$, not by number of stored elements.
+
+\end{frame}
+
+\section{Cardinality Estimation}
+
+\begin{frame}{The Cardinality Estimation Problem}
+
+    \begin{definition}[Cardinality Estimation]
+        Given a multiset $S$ of elements drawn from universe $\mathcal{U}$, determine $|S|$, the number of distinct elements in $S$.
+    \end{definition}
+
+    \textbf{Naive Implementation in Data-Parallel Framework:}
+
+    \begin{itemize}
+        \item \emph{Initial stage:} each parallel worker processes partition to produce local set of unique elements.
+
+        \item \emph{Shuffle stage:} transmit all unique elements from all partitions to reducer nodes for final aggregation and deduplication.
+    \end{itemize}
+
+    \begin{block}{The Bottleneck}
+        Communication cost proportional to number of unique elements and their size. For datasets with high cardinality, network I/O dominates total execution time.
+    \end{block}
+
+    \textbf{Challenge:} Enable cardinality aggregation without shuffle of raw data.
+
+\end{frame}
+
+\begin{frame}{Requirements for Distributed Aggregation}
+
+    A distributed cardinality estimation oracle must combine partial estimates from different partitions. The combination operation must satisfy three requirements:
+
+    \begin{block}{Requirements}
+        \begin{itemize}
+            \item \textbf{Error Equivalence:} Result has error bounds identical to oracle constructed in single pass over complete dataset.
+            \item \textbf{Cardinality Independence:} Execution time proportional to estimate representation size, not to number of elements.
+            \item \textbf{Order Independence:} Final global estimate identical regardless of combination sequence. No coordination required.
+        \end{itemize}
+    \end{block}
+
+    These requirements specify a class of binary operations over cardinality estimation oracles.
+
+\end{frame}
+
+\begin{frame}{Composability}
+
+    \begin{definition}[Composability]
+        Let $\mathcal{D}_1, \dots, \mathcal{D}_k$ be instances constructed over partitions $S_1, \dots, S_k$. The oracle exhibits composability if there exists binary operation $\cup$ such that:
+        \begin{itemize}
+            \item Combined oracle $\mathcal{D}_{agg} = \mathcal{D}_1 \cup \dots \cup \mathcal{D}_k$ has expected relative error asymptotically equivalent to single-pass construction over $S = \bigcup_{i=1}^k S_i$
+            \item Operation $\cup$ is commutative and associative
+            \item For fault tolerance, operation must be idempotent
+        \end{itemize}
+    \end{definition}
+
+    \vspace{1em}
+
+    \textbf{Consequences:}
+    Idempotency enables \emph{at-least-once} delivery without \emph{exactly-once} coordination overhead. These properties transform non-additive \texttt{COUNT(DISTINCT)} into decomposable aggregation.
+
+\end{frame}
+
+\begin{frame}{HyperLogLog}
+
+    \begin{definition}[HyperLogLog Sketch]
+        Array $M$ of $m=2^p$ registers initialized to 0. Hash function $h: \mathcal{U} \to \{0,1\}^L$ distributes elements uniformly.
+    \end{definition}
+
+    \textbf{Update Rule:} For element $v$, compute $x = h(v)$. First $p$ bits determine register $j \in \{0, \dots, m-1\}$. Remaining bits $w$ compute observable $\rho(w) = 1 + \text{lz}(w)$. Update:
+    $$M[j] := \max(M[j], \rho(w))$$
+
+    \textbf{Cardinality Estimator:}
+    $$E = \alpha_m m^2 \left( \sum_{j=0}^{m-1} 2^{-M[j]} \right)^{-1}$$
+
+    Relative error $\approx 1.04/\sqrt{m}$. Space: $\Theta(m \log\log n)$ bits.
+
+\end{frame}
+
+\begin{frame}{Union Operation and Algebraic Properties}
+
+    \begin{definition}[HyperLogLog Union]
+        Let $M_1$ and $M_2$ be sketches representing sets $S_1$ and $S_2$. Union computed as:
+        $$M_{1 \cup 2}[j] := \max(M_1[j], M_2[j]) \quad \forall j$$
+    \end{definition}
+
+    \begin{theorem}[Union Equivalence]
+        Sketch $M_{1 \cup 2}$ equivalent to sketch from single-pass processing of $S_1 \cup S_2$.
+    \end{theorem}
+
+    \begin{theorem}[Algebraic Properties]
+        Union operation is commutative, associative, and idempotent.
+    \end{theorem}
+
+    Register-wise maximum executes in $O(m)$ time, independent of dataset cardinality.
+
+\end{frame}
+
+\begin{frame}{HLL Satisfies Composability}
+
+    \begin{block}{Verification}
+        Register-wise maximum constitutes binary operation $\cup$ required by composability definition.
+    \end{block}
+
+    \textbf{Properties Satisfied:}
+    \begin{itemize}
+        \item Commutativity and associativity guarantee order-independent aggregation
+        \item Idempotency enables fault tolerance under at-least-once delivery semantics
+        \item Expected relative error equivalent to single-pass construction
+    \end{itemize}
+
+    \textbf{Consequence:} Communication cost becomes $\Theta(ks)$ for $k$ worker nodes transmitting sketches of size $s$, independent of dataset cardinality $n$. Transforms cardinality estimation from communication-bound to computation-bound problem.
+
+\end{frame}
+
+% \begin{frame}{Challenges at Scale}
+
+%     \begin{block}{Cardinality Skew}
+%         GROUP BY operations produce power-law distributions. Most groups contain few unique elements. Standard HLL exhibits systematic bias at low cardinalities.
+%     \end{block}
+
+%     \begin{block}{Communication Overhead}
+%         Map phase generates separate sketch per group per worker. Total sketches: millions to billions.
+
+%         Shuffle must serialize, transmit, deserialize large volume of small objects.
+
+%         Bottleneck shifts from data transmission to serialization overhead.
+%     \end{block}
+
+% \end{frame}
+
+\begin{frame}{HyperLogLog++: Engineering Solution}
+
+    \begin{definition}[HyperLogLog++]
+        Extension of standard HLL addressing cardinality skew and communication overhead at scale through dual representation and empirical corrections.
+    \end{definition}
+
+    \begin{block}{Dual Representation}
+        \textbf{Sparse Format:} Variable-length encoded sorted list of (index, value) pairs.
+
+        \textbf{Dense Format:} Standard fixed-size array of $m$ registers.
+
+        % \textbf{Transition Rule:} When encoded byte size of sparse representation exceeds byte size of dense format.
+    \end{block}
+
+    \textbf{Additional Refinements:}
+    \begin{itemize}
+        \item Empirical bias correction table for low-cardinality accuracy
+        \item 64-bit hash function eliminates large-range correction
+    \end{itemize}
+
+    Sparse format reduces memory footprint by order of magnitude, directly reducing shuffle communication volume.
+
+\end{frame}
+
+\begin{frame}{Architectural Patterns Enabled by Composability}
+
+    \begin{block}{MapReduce: Two-Level Hierarchy}
+        \begin{itemize}
+            \item Map stage: workers generate local HLL sketches per data partition
+            \item Shuffle stage: transmit compact sketches to reducer nodes
+            \item Reduce stage: apply union operation to merge sketches for each key
+        \end{itemize}
+        Correctness guaranteed by commutativity and associativity of union.
+    \end{block}
+
+    \begin{block}{Stream Processing: Temporal Hierarchies}
+        Partition unbounded stream into logical windows. Maintain local sketch per window. Cardinality over interval $T$ composed of sub-intervals $t_1, \ldots, t_k$:
+        $$M_T = \bigcup_{i=1}^{k} M_{t_i}$$
+        Cost independent of raw data volume.
+    \end{block}
+
+\end{frame}
+
+% \begin{frame}{Hierarchical Pattern and Multi-Resolution Querying}
+
+%     \begin{block}{Tree-Based Aggregation}
+%         \begin{itemize}
+%             \item Leaf nodes generate sketches from raw data streams
+%             \item Intermediate nodes merge sketches from children periodically
+%             \item Root maintains global sketch for entire system
+%         \end{itemize}
+%     \end{block}
+
+%     \textbf{Key Properties:}
+%     \begin{itemize}
+%         \item \textbf{Correctness:} Associativity ensures final global sketch identical regardless of tree depth or merge order
+%         \item \textbf{Multi-resolution querying:} Queries at different hierarchy levels answered from pre-aggregated sketches without reprocessing
+%         \item \textbf{Communication cost:} $\Theta(ks)$ for $k$ nodes transmitting sketches of size $s$, independent of cardinality $n$
+%     \end{itemize}
+
+% \end{frame}
+
+\begin{frame}{Variants Preserving Composability}
+
+    \begin{definition}[UltraLogLog]
+        Generalizes HyperLogLog register structure by partitioning register bits. Set of $q$ bits stores maximum update value $u_i$. Set of $d$ additional bits acts as compact summary indicating whether updates with values $u_i-1, \dots, u_i-d$ occurred.
+    \end{definition}
+
+    \textbf{Performance:} ULL configuration with $q=6$ and $d=2$ fits in single 8-bit register. Achieves memory-variance product approximately 28\% lower than standard 6-bit HLL.
+
+    \textbf{Properties:} Remains commutative, idempotent, and mergeable.
+
+    \begin{definition}[HyperLogLogLog]
+        3-tuple $(S, M, B)$ where $B$ is base value, $M$ stores small-width offsets for registers near $B$, $S$ is sparse associative array for outlier registers.
+    \end{definition}
+
+    \textbf{Space:} $\approx m \log_2\log_2\log_2 m$ bits for large $n$.
+
+\end{frame}
+
+% \begin{frame}{Functional Limitations and Trade-offs}
+
+%     \textbf{HyperLogLog Specialization:}
+
+%     HLL highly specialized for cardinality estimation and set union. Merge operation fundamental for distributed aggregation. Does not natively support intersection or set difference operations.
+
+%     \begin{block}{Alternative Structures}
+%         MinHash and Theta Sketches designed to estimate Jaccard similarity between sets. From similarity, can derive sizes of union, intersection, and difference.
+
+%         Trade-off: For primary task of cardinality estimation, HLL substantially more space-efficient than MinHash-based sketches providing same estimation accuracy.
+%     \end{block}
+
+%     \textbf{Architectural Decision:}
+
+%     Choice between HLL and MinHash-based approaches is not optimization detail but primary architectural decision dictated by functional requirements. HLL architecturally optimized for distributed union-based cardinality aggregation.
+
+% \end{frame}
+
+\section{Framework}
+
+\begin{frame}{Orthogonality of Properties}
+
+    \begin{block}{Distinct Constraints}
+        \textbf{Mutability} constrains the \emph{update interface}:
+        oracle must track element-level contributions for targeted removal.
+
+        \textbf{Composability} constrains the \emph{merge interface}:
+        oracle state must be derivable from commutative operations.
+    \end{block}
+
+    \vspace{0.5em}
+
+    \textbf{Conflicting Requirements on State Representation:}
+
+    \begin{itemize}
+        \item Mutability requires retaining information to identify
+              specific element contributions
+        \item Composability requires information loss through
+              commutative operations discarding element identities
+    \end{itemize}
+
+\end{frame}
+
+\begin{frame}{Formalizing Deletion Requirements}
+
+    \begin{definition}[Reversible Element Representation]
+        An oracle $\mathcal{D}$ maintains a reversible representation of element $x$ if a deterministic procedure identifies a set of memory locations $L_x \subseteq \text{State}(\mathcal{D})$ such that:
+        \begin{enumerate}
+            \item $L_x$ contains all locations modified by the insertion of $x$.
+            \item The operation $\textsc{Remove}(x)$ modifies only $L_x$, preserving the query probability for all $y \neq x$:
+                  $$P(\mathcal{D}.\textsc{Query}(y) = \text{true})_{\text{after}} = P(\mathcal{D}.\textsc{Query}(y) = \text{true})_{\text{before}}$$
+        \end{enumerate}
+    \end{definition}
+
+    \vspace{1em}
+
+    The Cuckoo Filter satisfies this by storing explicit fingerprints in discrete buckets. The HyperLogLog sketch violates this by merging contributions into maximum registers.
+
+\end{frame}
+
+
+\begin{frame}{The Incompatibility Theorem}
+
+    \begin{lemma}[State Indistinguishability]
+        Let $\mathcal{D}$ possess an idempotent merge operation where $s \cup s = s$. The state $s_1$ resulting from a single insertion of $x$ is syntactically identical to the state $s_2$ resulting from merging $s_1$ with itself.
+    \end{lemma}
+
+    \vspace{0.5em}
+
+    \begin{theorem}[Structural Incompatibility]
+        Let $\mathcal{D}$ be a probabilistic oracle without auxiliary structures. If $\mathcal{D}$ provides an idempotent merge operation, it cannot support an $O(1)$ deletion operation without introducing false negatives, unless it maintains reversible element representations.
+    \end{theorem}
+
+    \vspace{0.5em}
+
+    This structural impossibility forces systems to specialize: Cuckoo Filters optimize for mutability, while HyperLogLog optimizes for composability.
+
+\end{frame}
+
+% \begin{frame}{Deployment Patterns}
+
+%     We classify distributed architectures into two categories based on how they utilize the derived properties.
+
+%     \vspace{0.5em}
+
+%     \begin{block}{Pattern I: Local-Execution}
+%         This architecture aligns the partitioning of the oracle state with the partitioning of the dataset. Queries are routed to the node responsible for the data element, eliminating network overhead for oracle access.
+
+%         \vspace{0.5em}
+%         \emph{Constraint:} The viability of this pattern is contingent upon \emph{Dynamic Mutability}. The co-located oracle must support efficient deletion to remain consistent with the local data partition.
+%     \end{block}
+
+
+%     \begin{block}{Pattern II: Hierarchical-Reduction}
+%         This architecture organizes nodes into reduction trees where intermediate nodes aggregate partial results. The system combines sketches from disparate partitions to form global estimates.
+
+%         \vspace{0.5em}
+%         \emph{Constraint:} The correctness of this pattern is contingent upon \emph{Composability}. The merge operation must be commutative, associative, and idempotent to tolerate arbitrary arrival orders and network retries.
+%     \end{block}
+
+% \end{frame}
+
+\begin{frame}{Structure Selection Criteria}
+
+    We propose a decision matrix based on data lifecycle and query scope.
+
+    \vspace{1em}
+
+    \begin{center}
+        \renewcommand{\arraystretch}{1.5}
+        \begin{tabular}{ m{3.5cm} | m{3.5cm} | m{3.5cm} }
+                                                                   & \emph{Single-Partition}                             & \emph{Multi-Partition}                                       \\
+            \hline
+            \emph{Fully Dynamic} \newline (Insert \& Delete)       & \textbf{Cuckoo Filter} \newline Requires Mutability & \textbf{Hybrid Approach} \newline Requires Separated Oracles \\
+            \hline
+            \emph{Static / Append-Only} \newline (Immutable / TTL) & \textbf{Bloom Filter} \newline Baseline Efficiency  & \textbf{HyperLogLog} \newline Requires Composability         \\
+        \end{tabular}
+    \end{center}
+
+    \vspace{1em}
+
+    Workloads requiring both deletion and aggregation confront the incompatibility theorem, necessitating hybrid deployments with distinct oracles.
+
+\end{frame}
+
+% \begin{frame}{Open Research Directions}
+
+%     We identify three critical frontiers extending the theoretical framework.
+
+%     \vspace{0.5em}
+
+%     \begin{block}{Theoretical Relaxations}
+%         The incompatibility theorem assumes strict idempotence and zero false negatives. Future work must establish space lower bounds for structures that achieve approximate properties: $\eta$-deletion (bounded false negative rate) and $\delta$-composability (probabilistic idempotence).
+%     \end{block}
+
+%     \vspace{1em}
+
+%     \begin{block}{Adversarial Resilience}
+%         Standard aggregation operations (e.g., maximum, harmonic mean) are vulnerable to cardinality inflation attacks. Research is shifting towards Byzantine-resilient aggregation rules, such as the Geometric Median, to filter malicious updates in untrusted environments.
+%     \end{block}
+
+%     \vspace{1em}
+
+%     \begin{block}{Privacy in Federated Contexts}
+%         Sharing sketches exposes information about rare elements. We propose integrating Differential Privacy and k-anonymity guarantees directly into bucket representations to enable collaborative analytics on sensitive data without leakage.
+%     \end{block}
+
+% \end{frame}
+
+\begin{frame}{Conclusion}
+
+    We have demonstrated that the architectural value of probabilistic data structures in disaggregated systems derives from two orthogonal properties.
+
+
+    \begin{alertblock}{The Core Thesis}
+        \emph{Dynamic Mutability} resolves the constraint of state synchronization, enabling consistency in evolving datasets.
+        \emph{Composability} resolves the constraint of distributed aggregation, enabling communication-efficient reduction.
+    \end{alertblock}
+
+
+    \begin{block}{Architectural Implications}
+        The incompatibility between these properties is an information-theoretic necessity, not an algorithmic limitation. Consequently, the selection of a probabilistic oracle is not a local optimization but a structural decision dictated by the intersection of data lifecycle dynamics and query scope.
+    \end{block}
+
+\end{frame}
+
+\end{document}
