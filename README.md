@@ -5,4 +5,4 @@
 
 This repository contains the LaTeX source code for the survey "A Framework for Probabilistic Oracles in Distributed Systems". _Still a work in progress_.
 
-You can find the compiled PDF here: [survey.pdf](https://lukefleed.github.io/sdpds/survey.pdf)
+You can find the compiled PDF here: [survey.pdf](https://lukefleed.github.io/sdpds/survey.pdf), [slides.pdf](https://lukefleed.github.io/sdpds/slides.pdf)

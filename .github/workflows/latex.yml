@@ -12,8 +12,12 @@ jobs:
         with:
           working_directory: "TeX"
           root_file: "survey.tex"
+      - uses: xu-cheng/latex-action@v4
+        with:
+          working_directory: "slides"
+          root_file: "slides.tex"
       - name: move
-        run: mkdir -p github_deploy && mv TeX/survey.pdf github_deploy/
+        run: mkdir -p github_deploy && mv TeX/survey.pdf slides/slides.pdf github_deploy/
       - name: deploy on orphan branch
         uses: peaceiris/actions-gh-pages@v4
         with:
