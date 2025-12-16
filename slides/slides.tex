@@ -450,23 +450,23 @@
 
 % \end{frame}
 
-\begin{frame}{Variants Preserving Composability}
+% \begin{frame}{Variants Preserving Composability}
 
-    \begin{definition}[UltraLogLog]
-        Generalizes HyperLogLog register structure by partitioning register bits. Set of $q$ bits stores maximum update value $u_i$. Set of $d$ additional bits acts as compact summary indicating whether updates with values $u_i-1, \dots, u_i-d$ occurred.
-    \end{definition}
+%     \begin{definition}[UltraLogLog]
+%         Generalizes HyperLogLog register structure by partitioning register bits. Set of $q$ bits stores maximum update value $u_i$. Set of $d$ additional bits acts as compact summary indicating whether updates with values $u_i-1, \dots, u_i-d$ occurred.
+%     \end{definition}
 
-    \textbf{Performance:} ULL configuration with $q=6$ and $d=2$ fits in single 8-bit register. Achieves memory-variance product approximately 28\% lower than standard 6-bit HLL.
+%     \textbf{Performance:} ULL configuration with $q=6$ and $d=2$ fits in single 8-bit register. Achieves memory-variance product approximately 28\% lower than standard 6-bit HLL.
 
-    \textbf{Properties:} Remains commutative, idempotent, and mergeable.
+%     \textbf{Properties:} Remains commutative, idempotent, and mergeable.
 
-    \begin{definition}[HyperLogLogLog]
-        3-tuple $(S, M, B)$ where $B$ is base value, $M$ stores small-width offsets for registers near $B$, $S$ is sparse associative array for outlier registers.
-    \end{definition}
+%     \begin{definition}[HyperLogLogLog]
+%         3-tuple $(S, M, B)$ where $B$ is base value, $M$ stores small-width offsets for registers near $B$, $S$ is sparse associative array for outlier registers.
+%     \end{definition}
 
-    \textbf{Space:} $\approx m \log_2\log_2\log_2 m$ bits for large $n$.
+%     \textbf{Space:} $\approx m \log_2\log_2\log_2 m$ bits for large $n$.
 
-\end{frame}
+% \end{frame}
 
 % \begin{frame}{Functional Limitations and Trade-offs}
 
@@ -617,21 +617,24 @@
 
 % \end{frame}
 
-\begin{frame}{Conclusion}
+% \begin{frame}{}
 
-    We have demonstrated that the architectural value of probabilistic data structures in disaggregated systems derives from two orthogonal properties.
+%     \centering \Large
+%     \emph{Fine}
 
-
-    \begin{alertblock}{The Core Thesis}
-        \emph{Dynamic Mutability} resolves the constraint of state synchronization, enabling consistency in evolving datasets.
-        \emph{Composability} resolves the constraint of distributed aggregation, enabling communication-efficient reduction.
-    \end{alertblock}
+%     % We have demonstrated that the architectural value of probabilistic data structures in disaggregated systems derives from two orthogonal properties.
 
 
-    \begin{block}{Architectural Implications}
-        The incompatibility between these properties is an information-theoretic necessity, not an algorithmic limitation. Consequently, the selection of a probabilistic oracle is not a local optimization but a structural decision dictated by the intersection of data lifecycle dynamics and query scope.
-    \end{block}
+%     % \begin{alertblock}{The Core Thesis}
+%     %     \emph{Dynamic Mutability} resolves the constraint of state synchronization, enabling consistency in evolving datasets.
+%     %     \emph{Composability} resolves the constraint of distributed aggregation, enabling communication-efficient reduction.
+%     % \end{alertblock}
 
-\end{frame}
+
+%     % \begin{block}{Architectural Implications}
+%     %     The incompatibility between these properties is an information-theoretic necessity, not an algorithmic limitation. Consequently, the selection of a probabilistic oracle is not a local optimization but a structural decision dictated by the intersection of data lifecycle dynamics and query scope.
+%     % \end{block}
+
+% \end{frame}
 
 \end{document}
