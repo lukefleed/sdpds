@@ -18,19 +18,20 @@
 
 \begin{frame}{The Impedance Mismatch}
 
-    \begin{block}{Disaggregated Architecture}
-        Compute workers: stateless, ephemeral. Storage servers: network-separated. Network latency $t_{\text{network}} \gg t_{\text{local}}$ dominates operation cost.
+    \begin{block}{Partitioned Distributed Architecture}
+        Data partitioned across nodes for scalability.
+        Each node maintains local state for its partition.
+        Queries for non-local partitions incur network latency: $t_{\text{network}} \gg t_{\text{local}}$.
     \end{block}
 
-
-    \textbf{Problem:} State-dependent computation requires querying remote state. Every validation query incurs network round-trip.
-
+    \textbf{Problem:} Queries may require remote state access.
+    Cross-partition operations dominate cost.
 
     \begin{block}{Critical Operations}
         \begin{itemize}
-            \item \textbf{Membership Testing:} Given remote $S \subseteq \mathcal{U}$, determine $x \in S$. Cost: one round-trip per query.
+            \item \textbf{Membership Testing:} Determine $x \in S$ where $S$ spans multiple partitions. Cost: one round-trip if $x$ not local.
 
-            \item \textbf{Cardinality Estimation:} Compute $|S|$ for partitioned dataset. Exact \texttt{COUNT(DISTINCT)} requires shuffle of all unique elements. Cost: $\Theta(n \cdot |x|)$.
+            \item \textbf{Cardinality Estimation:} Compute $|S|$ for partitioned dataset. Exact \texttt{COUNT(DISTINCT)} requires shuffle. Cost: $\Theta(n \cdot |x|)$.
         \end{itemize}
     \end{block}
 
