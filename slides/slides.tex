@@ -351,26 +351,26 @@
         Union operation is commutative, associative, and idempotent.
     \end{theorem}
 
-    Register-wise maximum executes in $O(m)$ time, independent of dataset cardinality.
+    Communication cost becomes $\Theta(ks)$ for $k$ worker nodes transmitting sketches of size $s$, independent of dataset cardinality $n$.
 
 \end{frame}
 
-\begin{frame}{HLL Satisfies Composability}
+% \begin{frame}{HLL Satisfies Composability}
 
-    \begin{block}{Verification}
-        Register-wise maximum constitutes binary operation $\cup$ required by composability definition.
-    \end{block}
+%     \begin{block}{Verification}
+%         Register-wise maximum constitutes binary operation $\cup$ required by composability definition.
+%     \end{block}
 
-    \textbf{Properties Satisfied:}
-    \begin{itemize}
-        \item Commutativity and associativity guarantee order-independent aggregation
-        \item Idempotency enables fault tolerance under at-least-once delivery semantics
-        \item Expected relative error equivalent to single-pass construction
-    \end{itemize}
+%     \textbf{Properties Satisfied:}
+%     \begin{itemize}
+%         \item Commutativity and associativity guarantee order-independent aggregation
+%         \item Idempotency enables fault tolerance under at-least-once delivery semantics
+%         \item Expected relative error equivalent to single-pass construction
+%     \end{itemize}
 
-    \textbf{Consequence:} Communication cost becomes $\Theta(ks)$ for $k$ worker nodes transmitting sketches of size $s$, independent of dataset cardinality $n$. Transforms cardinality estimation from communication-bound to computation-bound problem.
+%     \textbf{Consequence:} Communication cost becomes $\Theta(ks)$ for $k$ worker nodes transmitting sketches of size $s$, independent of dataset cardinality $n$. Transforms cardinality estimation from communication-bound to computation-bound problem.
 
-\end{frame}
+% \end{frame}
 
 % \begin{frame}{Challenges at Scale}
 
